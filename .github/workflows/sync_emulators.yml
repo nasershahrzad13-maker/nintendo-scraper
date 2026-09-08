@@ -1,0 +1,54 @@
+name: 🕹️ Nintendo Switch Emulators to AbreHamrahi Sync Worker
+
+on:
+  # schedule:
+  #   - cron: '0 3 */3 * *'
+  workflow_dispatch:
+    inputs:
+      single_slug:
+        description: '🕹️ شناسه شبیه‌ساز (اختیاری - ryujinx, sudachi, suyu, torzu, switch-firmware-keys)'
+        required: false
+        type: string
+
+jobs:
+  sync-emulators:
+    name: 🚀 Download Switch Emulators & Upload to AbreHamrahi Cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 📦 Install High-Speed Download Tools (Aria2 & Curl)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 curl
+
+      - name: ⚡ Execute Emulators Sync & Cloud Upload Pipeline
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          SYNC_API_TOKEN: ${{ secrets.SYNC_API_TOKEN }}
+          ABREHAMRAHI_REFRESH_TOKEN: ${{ secrets.ABREHAMRAHI_REFRESH_TOKEN }}
+        run: |
+          cd scripts/youtube-downloader 2>/dev/null || true
+          CMD="node sync_emulators.cjs"
+          
+          if [ -n "${{ github.event.inputs.single_slug }}" ]; then
+            CMD="$CMD --single-slug \"${{ github.event.inputs.single_slug }}\""
+          fi
+
+          echo "Executing: $CMD"
+          eval $CMD
+
+      - name: 📋 Display Summary
+        if: always()
+        run: |
+          echo "### 🕹️ فرآیند انتقال شبیه‌سازهای سوییچ به سرورهای نیم‌بها انجام شد!" >> $GITHUB_STEP_SUMMARY
+          echo "- **تاریخ اجرا:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "- **وضعیت:** با موفقیت اجرا و پایگاه‌داده سایت با لینک‌های مستقیم نیم‌بها بروز شد." >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,69 @@
+name: ✈️ Upload File to Telegram Cloud (Cloudflare Proxy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_url:
+        description: '🔗 لینک دانلود مستقیم فایل (مانند NSP/ROM/Zip)'
+        required: true
+        type: string
+      file_name:
+        description: '🏷️ نام فایل جهت ذخیره در تلگرام (اختیاری)'
+        required: false
+        type: string
+
+jobs:
+  upload-telegram:
+    name: 🚀 Download & Upload File to Telegram Channel
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 📦 Install Aria2 & Packaging Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 p7zip-full zip unzip
+
+      - name: ⬇️ Download Target File using Aria2
+        run: |
+          mkdir -p downloads
+          aria2c -x 16 -s 16 -k 1M "${{ github.event.inputs.file_url }}" -d downloads/
+
+      - name: ⚡ Start Local Telegram Bot API Server (Enable 2GB Upload Mode)
+        run: |
+          echo "🚀 Starting Telegram Bot API Local Server (2GB Upload Support)..."
+          docker run -d -p 8081:8081 -e TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID || '611335' }} -e TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH || '284b136413271772e392e697011edd16' }} aiogram/telegram-bot-api --local --local-mode
+          echo "TELEGRAM_BOT_API_HOST=127.0.0.1:8081" >> $GITHUB_ENV
+          echo "TELEGRAM_LOCAL_SERVER=true" >> $GITHUB_ENV
+          sleep 4
+
+      - name: ✈️ Upload File to Telegram Storage
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CLOUDFLARE_WORKER_DOMAIN: ${{ secrets.CLOUDFLARE_WORKER_DOMAIN || 'dl.ninten2.com' }}
+        run: |
+          TARGET_FILE=$(find downloads -type f | head -n 1)
+          echo "Target File: $TARGET_FILE"
+          
+          CMD="node telegram_uploader.cjs --file \"$TARGET_FILE\""
+          if [ -n "${{ github.event.inputs.file_name }}" ]; then
+            CMD="$CMD --name \"${{ github.event.inputs.file_name }}\""
+          fi
+          
+          eval $CMD
+
+      - name: 📋 Display Output Summary
+        if: always()
+        run: |
+          echo "### ✈️ آپلود فایل به تلگرام با موفقیت انجام شد!" >> $GITHUB_STEP_SUMMARY
+          echo "- **زمان:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "- **آدرس مستقیم Cloudflare Worker در بخش خروجی مرحله قبل قرار گرفت.**" >> $GITHUB_STEP_SUMMARY

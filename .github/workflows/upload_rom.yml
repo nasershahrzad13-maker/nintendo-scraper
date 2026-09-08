@@ -1,0 +1,169 @@
+name: 🚀 Upload Switch ROM to AbreHamrahi
+
+on:
+  workflow_dispatch:
+    inputs:
+      rom_url:
+        description: '🔗 Direct Download URL (یا لینک مستقیم فایل بازی NSP/XCI/Zip)'
+        required: true
+        type: string
+      game_title:
+        description: '🎮 نام بازی (مثلاً Super Mario Bros Wonder)'
+        required: true
+        type: string
+      folder_path:
+        description: '📁 مسیر پوشه در ابر همراهی (پیش‌فرض: Nintendo_Switch/نام_بازی)'
+        required: false
+        default: 'Nintendo_Switch'
+        type: string
+      custom_file_name:
+        description: '📝 نام اختصاصی فایل (اختیاری - در صورت خالی بودن نام پیش‌فرض تولید می‌شود)'
+        required: false
+        type: string
+      split_2gb:
+        description: '📦 تقسیم به پارت‌های ۲ گیگابایتی RAR (.part1.rar) در صورت حجم بالای ۲ گیگابایت؟'
+        required: false
+        default: 'true'
+        type: boolean
+
+jobs:
+  download-and-upload:
+    name: ⚡ Download, Split (2GB RAR) & Upload to Hamrahi
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: 🧹 Free Disk Space (Maximize Runner Space ~70GB+)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 📦 Install High-Speed Download & Packaging Tools (Aria2, RAR, 7z, Zip)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 rar unrar p7zip-full zip unzip
+
+      - name: ⚡ Download Game File via High-Speed Pipeline
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/downloads"
+          cd "$GITHUB_WORKSPACE/downloads"
+          
+          aria2c -x 16 -s 16 -j 4 \
+            --check-certificate=false \
+            --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+            "${{ github.event.inputs.rom_url }}"
+
+          DOWNLOADED_FILE=$(ls -1 | head -n 1)
+          FILE_PATH="$GITHUB_WORKSPACE/downloads/$DOWNLOADED_FILE"
+          FILE_SIZE=$(stat -c%s "$FILE_PATH")
+
+          echo "Downloaded file: $DOWNLOADED_FILE ($FILE_SIZE bytes)"
+          
+          if [ "$FILE_SIZE" -lt 5242880 ]; then
+            if grep -qiE "<html|<!doctype html|403 forbidden|access denied" "$FILE_PATH"; then
+              echo "❌ ERROR: The provided URL returned an HTML error page!"
+              head -n 25 "$FILE_PATH"
+              exit 1
+            fi
+            echo "❌ ERROR: Downloaded file size is only $FILE_SIZE bytes. Expected valid Switch ROM (> 5MB)."
+            exit 1
+          fi
+
+          echo "DOWNLOADED_FILE=$DOWNLOADED_FILE" >> $GITHUB_ENV
+          echo "FILE_PATH=$FILE_PATH" >> $GITHUB_ENV
+          echo "FILE_SIZE=$FILE_SIZE" >> $GITHUB_ENV
+          ls -lh
+
+      - name: 🔒 Package & Split into 2GB RAR Parts (.part1.rar, .part2.rar)
+        id: package_step
+        run: |
+          RAW_FILE="$FILE_PATH"
+          PACKAGED_DIR="$GITHUB_WORKSPACE/downloads/packaged"
+          mkdir -p "$PACKAGED_DIR"
+          
+          CUSTOM_NAME="${{ github.event.inputs.custom_file_name }}"
+          CLEAN_TITLE=$(echo "${{ github.event.inputs.game_title }}" | tr ' ' '_' | tr -cd '[:alnum:]_-')
+          
+          if [ -n "$CUSTOM_NAME" ]; then
+            BASE_NAME=$(echo "$CUSTOM_NAME" | sed 's/\.[^.]*$//')
+          else
+            BASE_NAME="${CLEAN_TITLE}"
+          fi
+
+          SPLIT_THRESHOLD=2097152000
+          
+          if [ "$FILE_SIZE" -gt "$SPLIT_THRESHOLD" ] && [ "${{ github.event.inputs.split_2gb }}" == "true" ]; then
+            echo "📦 File size ($FILE_SIZE bytes) exceeds 2GB -> Splitting into 2000MB password-protected RAR parts..."
+            rar a -v2000m -m0 -p"ninten2.ir" -ep1 -idq "$PACKAGED_DIR/${BASE_NAME}.rar" "$RAW_FILE"
+            rm -f "$RAW_FILE"
+          else
+            echo "📦 Packaging into single password-protected RAR file..."
+            rar a -m0 -p"ninten2.ir" -ep1 -idq "$PACKAGED_DIR/${BASE_NAME}.rar" "$RAW_FILE"
+            rm -f "$RAW_FILE"
+          fi
+
+          echo "Listing packaged RAR parts:"
+          ls -lh "$PACKAGED_DIR"
+
+      - name: 🧪 Verify Integrity of Created RAR Parts Before Upload
+        run: |
+          PACKAGED_DIR="$GITHUB_WORKSPACE/downloads/packaged"
+          cd "$PACKAGED_DIR"
+          FIRST_PART=$(ls -1 *.rar | head -n 1)
+          echo "🔍 Testing integrity of local packaged file $FIRST_PART..."
+          unrar t -p"ninten2.ir" "$FIRST_PART"
+
+      - name: ☁️ Upload All Parts to AbreHamrahi Cloud
+        id: upload_step
+        env:
+          ABREHAMRAHI_REFRESH_TOKEN: ${{ secrets.ABREHAMRAHI_REFRESH_TOKEN }}
+        run: |
+          FOLDER_PATH="${{ github.event.inputs.folder_path }}"
+          if [ "$FOLDER_PATH" == "Nintendo_Switch" ] && [ -n "${{ github.event.inputs.game_title }}" ]; then
+            CLEAN_TITLE=$(echo "${{ github.event.inputs.game_title }}" | tr ' ' '_' | tr -cd '[:alnum:]_-')
+            FOLDER_PATH="Nintendo_Switch/$CLEAN_TITLE"
+          fi
+
+          SUMMARY_FILE="$GITHUB_WORKSPACE/upload_summary.txt"
+          touch $SUMMARY_FILE
+
+          PACKAGED_DIR="$GITHUB_WORKSPACE/downloads/packaged"
+
+          for part_file in "$PACKAGED_DIR"/*; do
+            if [ -f "$part_file" ]; then
+              PART_NAME=$(basename "$part_file")
+              echo "--------------------------------------------------------"
+              echo "🚀 Uploading Part: $PART_NAME"
+              
+              node hamrahi_uploader.cjs --file "$part_file" --folder "$FOLDER_PATH" --name "$PART_NAME" --concurrency 4
+              
+              echo "- **فایل:** \`$PART_NAME\`" >> $SUMMARY_FILE
+            fi
+          done
+
+      - name: 📋 Display Summary and Public Download Links
+        if: always()
+        run: |
+          echo "### 🎮 انتشار خودکار بازی نینتندو سوییچ با موفقیت انجام شد!" >> $GITHUB_STEP_SUMMARY
+          echo "- **نام بازی:** ${{ github.event.inputs.game_title }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **مسیر پوشه در همراهی:** ${{ github.event.inputs.folder_path }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **رمز فایل‌ها (پسورد):** \`ninten2.ir\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 📦 لیست پارت‌ها:" >> $GITHUB_STEP_SUMMARY
+          if [ -f "$GITHUB_WORKSPACE/upload_summary.txt" ]; then
+            cat "$GITHUB_WORKSPACE/upload_summary.txt" >> $GITHUB_STEP_SUMMARY
+          fi

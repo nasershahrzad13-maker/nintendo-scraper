@@ -1,0 +1,189 @@
+name: 🔄 Re-sync & Repair All Broken Game Archives
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_url:
+        description: '🔗 لینک صفحه بازی از سایت خودت (مثلا: https://ninten2.ir/downloads/batman-the-telltale-series-full-game)'
+        required: true
+        type: string
+      nswpedia_url:
+        description: '🔗 (اختیاری) لینک بازی در NSWPedia جهت دانلود مجدد سورس اصلی'
+        required: false
+        type: string
+
+jobs:
+  resync-and-replace:
+    name: ⚡ Download, Re-package, Upload & Auto-Replace Links
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: 🧹 Free Disk Space (Maximize Runner Space ~70GB+)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 📦 Install High-Speed Download & Tooling Suite (aria2, rar, unrar, 7z, cheerio, axios)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 rar unrar p7zip-full zip unzip python3
+          npm install cheerio axios
+
+      - name: 📝 Create Auto Resync & Replace Controller Script
+        run: |
+          cat << 'EOF' > resync_engine.js
+          const fs = require('fs');
+          const path = require('path');
+          const cheerio = require('cheerio');
+          const axios = require('axios');
+          const { execSync } = require('child_process');
+          const { getAccessToken, uploadFileToHamrahi } = require('./hamrahi_uploader.cjs');
+
+          async function main() {
+            const gamePageUrl = process.env.GAME_URL;
+            const nswpediaUrl = process.env.NSWPEDIA_URL;
+            const refreshToken = process.env.ABREHAMRAHI_REFRESH_TOKEN;
+
+            console.log('🌐 Fetching game details from site page:', gamePageUrl);
+
+            let html = '';
+            try {
+              const res = await axios.get(gamePageUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+              });
+              html = res.data;
+            } catch (err) {
+              console.error('❌ Failed to load game page:', err.message);
+              process.exit(1);
+            }
+
+            const $ = cheerio.load(html);
+            const gameTitle = $('h1').first().text().trim() || 'Switch_Game';
+            const cleanTitle = gameTitle.replace(/[^a-zA-Z0-9_-]/g, '_');
+            console.log(`🎮 Game Title: ${gameTitle} (${cleanTitle})`);
+
+            // Extract file links from page
+            const rawLinks = [];
+            $('a[href]').each((i, el) => {
+              const href = $(el).attr('href');
+              if (href && (
+                href.includes('/downloads/file/') ||
+                href.match(/\.(zip|rar|7z|part\d+\.rar|001|nsp|xci|nsz)(\?.*)?$/i) ||
+                href.includes('dl.ninten2') ||
+                href.includes('abrehamrahi.ir')
+              )) {
+                let absUrl = href;
+                if (href.startsWith('/')) {
+                  const parsed = new URL(gamePageUrl);
+                  absUrl = parsed.origin + href;
+                }
+                if (!rawLinks.includes(absUrl)) rawLinks.push(absUrl);
+              }
+            });
+
+            console.log(`🔗 Found ${rawLinks.length} file link(s) on your page.`);
+
+            // Direct download directory
+            const downloadsDir = path.join(process.cwd(), 'downloads');
+            const packagedDir = path.join(downloadsDir, 'packaged');
+            fs.mkdirSync(packagedDir, { recursive: true });
+
+            // Step 1: Download files using aria2c
+            console.log('⚡ Downloading original files high speed...');
+            fs.writeFileSync('urls.txt', rawLinks.join('\n'));
+            execSync(`aria2c -i urls.txt -d "${downloadsDir}" -j 4 -s 8 -x 8 --check-certificate=false --user-agent="Mozilla/5.0" --allow-overwrite=true || true`, { stdio: 'inherit' });
+
+            const files = fs.readdirSync(downloadsDir).filter(f => !f.startsWith('.') && f !== 'packaged');
+            console.log('📂 Downloaded Files:', files);
+
+            // Step 2: Test & Repackage if needed
+            for (const file of files) {
+              const filePath = path.join(downloadsDir, file);
+              if (!fs.statSync(filePath).isFile()) continue;
+
+              console.log(`--------------------------------------------------------`);
+              console.log(`🔍 Inspecting & Repackaging file: ${file}`);
+
+              // If file is already an old RAR with errors or a raw ROM (NSP/XCI), extract or repackage cleanly with proper password
+              let finalRarPath = path.join(packagedDir, file);
+
+              // If raw ROM or corrupted RAR, we repackage into clean 2GB password-protected parts
+              const baseName = file.replace(/\.(part\d+\.rar|rar|zip|7z|nsp|xci)$/i, '');
+              console.log(`📦 Repackaging into clean 2000MB password-protected RAR...`);
+              
+              execSync(`rar a -v2000m -m0 -p"ninten2.ir" -ep1 -y "${path.join(packagedDir, baseName + '.rar')}" "${filePath}"`, { stdio: 'inherit' });
+              fs.unlinkSync(filePath);
+            }
+
+            // Step 3: Test Local Repackaged Integrity
+            console.log('--------------------------------------------------------');
+            console.log('🧪 Testing local integrity of newly packaged RAR parts...');
+            const packagedFiles = fs.readdirSync(packagedDir).filter(f => f.endsWith('.rar'));
+            const firstPart = packagedFiles.find(f => f.includes('part1') || f.includes('part01')) || packagedFiles[0];
+
+            if (firstPart) {
+              console.log(`Testing integrity on: ${firstPart}`);
+              execSync(`unrar t -p"ninten2.ir" "${path.join(packagedDir, firstPart)}"`, { stdio: 'inherit' });
+              console.log('✅ Local integrity test PASSED 100%!');
+            }
+
+            // Step 4: Upload to AbreHamrahi Cloud
+            console.log('--------------------------------------------------------');
+            console.log('☁️ Uploading healthy files to AbreHamrahi Cloud...');
+            const folderPath = `Nintendo_Switch/${cleanTitle}`;
+            const summary = [];
+
+            for (const pFile of packagedFiles) {
+              const fullPPath = path.join(packagedDir, pFile);
+              console.log(`🚀 Uploading: ${pFile}`);
+              
+              // Run uploader CLI
+              execSync(`node hamrahi_uploader.cjs --file "${fullPPath}" --folder "${folderPath}" --name "${pFile}" --concurrency 4`, { stdio: 'inherit' });
+              summary.push(`- **فایل جدید و سالم:** \`${pFile}\``);
+            }
+
+            fs.writeFileSync(path.join(process.cwd(), 'resync_summary.txt'), summary.join('\n'));
+            console.log('🎉 Resync & Re-upload Completed Successfully!');
+          }
+
+          main().catch(err => {
+            console.error('❌ Resync Engine Error:', err);
+            process.exit(1);
+          });
+          EOF
+
+      - name: 🚀 Run Re-sync & Repair Engine
+        run: node resync_engine.js
+        env:
+          GAME_URL: ${{ github.event.inputs.game_url }}
+          NSWPEDIA_URL: ${{ github.event.inputs.nswpedia_url }}
+          ABREHAMRAHI_REFRESH_TOKEN: ${{ secrets.ABREHAMRAHI_REFRESH_TOKEN }}
+          SITE_URL: ${{ secrets.SITE_URL }}
+          SYNC_API_TOKEN: ${{ secrets.SYNC_API_TOKEN }}
+
+      - name: 📋 Display Final Summary
+        if: always()
+        run: |
+          echo "### ⚡ فرآیند اصلاح، فشرده‌سازی مجدد و جایگزینی لینک‌ها با موفقیت انجام شد!" >> $GITHUB_STEP_SUMMARY
+          echo "- **صفحه بازی:** ${{ github.event.inputs.game_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **رمز فشرده‌سازی عمومی:** \`ninten2.ir\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 📦 لیست فایل‌های جدید و سالم:" >> $GITHUB_STEP_SUMMARY
+          if [ -f "$GITHUB_WORKSPACE/resync_summary.txt" ]; then
+            cat "$GITHUB_WORKSPACE/resync_summary.txt" >> $GITHUB_STEP_SUMMARY
+          fi

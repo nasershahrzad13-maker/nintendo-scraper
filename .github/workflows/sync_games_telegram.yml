@@ -1,0 +1,77 @@
+name: 🎮 NSWPedia to Telegram & Cloudflare Worker Game Sync
+
+on:
+  schedule:
+    # Run every 2 hours to check for pending games queue
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      single_url:
+        description: '🔗 NSWPedia Game URL (اختیاری - دانلود تک بازی خاص)'
+        required: false
+        type: string
+
+jobs:
+  sync-games-telegram:
+    name: 🚀 Download Switch ROM from NSWPedia & Upload to Telegram Storage
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: 🧹 Free Disk Space (Maximize Runner Space ~70GB+)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 📦 Install High-Speed Download & Packaging Tools (Aria2, RAR, 7z, Zip)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 rar unrar p7zip-full zip unzip
+
+      - name: ⚡ Start Local Telegram Bot API Server (Enable 2GB Upload Mode)
+        run: |
+          echo "🚀 Starting Telegram Bot API Local Server (2GB Upload Support)..."
+          docker run -d -p 8081:8081 -e TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID || '611335' }} -e TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH || '284b136413271772e392e697011edd16' }} aiogram/telegram-bot-api --local --local-mode
+          echo "TELEGRAM_BOT_API_HOST=127.0.0.1:8081" >> $GITHUB_ENV
+          echo "TELEGRAM_LOCAL_SERVER=true" >> $GITHUB_ENV
+          sleep 4
+
+      - name: ⚡ Execute Telegram & Cloudflare Sync Pipeline
+        id: sync_step
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          SYNC_API_TOKEN: ${{ secrets.SYNC_API_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CLOUDFLARE_WORKER_DOMAIN: ${{ secrets.CLOUDFLARE_WORKER_DOMAIN || 'dl.ninten2.com' }}
+        run: |
+          cd scripts/youtube-downloader 2>/dev/null || true
+          CMD="node sync_games_telegram.cjs"
+          
+          if [ -n "${{ github.event.inputs.single_url }}" ]; then
+            CMD="$CMD --single-url \"${{ github.event.inputs.single_url }}\""
+          fi
+
+          echo "Running: $CMD"
+          eval $CMD
+
+      - name: 📋 Display Summary
+        if: always()
+        run: |
+          echo "### 🎮 انتقال بازی نینتندو سوییچ به ذخیره‌ساز تلگرام انجام شد!" >> $GITHUB_STEP_SUMMARY
+          echo "- **زمان اجرا:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "- **وضعیت:** فایل‌ها در کانال تلگرام آپلود و لینک‌های مستقیم کلودفلر ثبت شدند." >> $GITHUB_STEP_SUMMARY
