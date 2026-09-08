@@ -83,18 +83,18 @@ def download_video(url, output_dir, cookie_path=None):
 def upload_to_hamrahi(file_path, folder_name="Videos"):
     """Upload downloaded video to AbreHamrahi Cloud using hamrahi_uploader.cjs"""
     if not ABREHAMRAHI_REFRESH_TOKEN:
-        print("❌ خطا: متغیر محیطی ABREHAMRAHI_REFRESH_TOKEN تنظیم نشده است.", flush=True)
+        print("❌ خطا: متغیر محیطی ABREHAMRAHI_REFRESH_TOKEN تنظیم نشده است.")
         return None
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     uploader_script = os.path.join(current_dir, "hamrahi_uploader.cjs")
 
     if not os.path.exists(uploader_script):
-        print(f"❌ خطا: اسکریپت آپلودر ابر همراهی یافت نشد: {uploader_script}", flush=True)
+        print(f"❌ خطا: اسکریپت آپلودر ابر همراهی یافت نشد: {uploader_script}")
         return None
 
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-    print(f"☁️ در حال آپلود ویدیو ({file_size_mb:.2f} MB) در پوشه {folder_name} ابر همراهی...", flush=True)
+    print(f"☁️ در حال آپلود ویدیو ({file_size_mb:.2f} MB) در پوشه {folder_name} ابر همراهی...")
 
     try:
         cmd = [
@@ -103,30 +103,25 @@ def upload_to_hamrahi(file_path, folder_name="Videos"):
             "--refresh-token", ABREHAMRAHI_REFRESH_TOKEN,
             "--file", file_path,
             "--folder", folder_name,
-            "--concurrency", "2"
+            "--concurrency", "4"
         ]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        public_url = None
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        output = proc.stdout
 
-        if proc.stdout:
-            for line in proc.stdout:
-                print(line, end='', flush=True)
-                match = re.search(r"Public Link:\s*(https?://[^\s\n]+)", line)
-                if match:
-                    public_url = match.group(1).strip()
-
-        proc.wait()
-
-        if proc.returncode == 0 and public_url:
-            print(f"🔗 لینک مستقیم ابر همراهی دریافت شد: {public_url}", flush=True)
-            return public_url
-        elif public_url:
+        # Find public link from uploader output
+        match = re.search(r"Public Link:\s*(https?://[^\s\n]+)", output)
+        if match:
+            public_url = match.group(1).strip()
+            print(f"🔗 لینک مستقیم ابر همراهی دریافت شد: {public_url}")
             return public_url
         else:
-            print(f"⚠️ آپلود انجام نشد یا لینک پابلیک استخراج نگردید (کد خروجی: {proc.returncode}).", flush=True)
+            print(f"⚠️ آپلود انجام شد اما لینک پابلیک استخراج نشد. خروجی:\n{output}")
             return None
+    except subprocess.CalledProcessError as e:
+        print(f"❌ خطای آپلود در ابر همراهی (exit {e.returncode}):\n{e.stderr or e.stdout}")
+        return None
     except Exception as e:
-        print(f"❌ خطای غیرمنتظره در ارتباط با آپلودر همراهی: {e}", flush=True)
+        print(f"❌ خطای غیرمنتظره در ارتباط با آپلودر همراهی: {e}")
         return None
 
 def save_video_link_to_site(item_type, item_id, public_url):

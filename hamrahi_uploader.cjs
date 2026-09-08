@@ -70,7 +70,7 @@ function request(options, data = null, retries = 3, timeoutMs = 30000) {
     });
 }
 
-function putChunk(urlStr, buffer, retries = 5, timeoutMs = 120000) {
+function putChunk(urlStr, buffer, retries = 3, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
         const url = new URL(urlStr);
         const req = https.request({
@@ -93,7 +93,7 @@ function putChunk(urlStr, buffer, retries = 5, timeoutMs = 120000) {
                     });
                 } else if (retries > 0) {
                     console.log(`\n⚠️ Chunk failed with status ${res.statusCode}. Retrying (${retries} left)...`);
-                    setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), 3000);
+                    setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), 2000);
                 } else {
                     reject(new Error(`Failed to upload chunk: HTTP ${res.statusCode}`));
                 }
@@ -107,7 +107,7 @@ function putChunk(urlStr, buffer, retries = 5, timeoutMs = 120000) {
         req.on('error', (err) => {
             if (retries > 0) {
                 console.log(`\n⚠️ Network error: ${err.message}. Retrying (${retries} left)...`);
-                setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), 3000);
+                setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), 2000);
             } else {
                 reject(err);
             }
