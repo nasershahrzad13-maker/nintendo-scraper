@@ -6,25 +6,12 @@
  */
 
 const https = require('https');
-const http = require('http');
-const dns = require('dns');
 const fs = require('fs');
 const path = require('path');
 
-// Prefer IPv4 for DNS resolution (critical for GitHub Actions runners connecting to Iranian hosts/CDNs)
-if (dns.setDefaultResultOrder) {
-    dns.setDefaultResultOrder('ipv4first');
-}
-
 const CHUNK_SIZE = 5242880; // 5MB standard chunk size for AbreHamrahi
 
-// HTTPS Agent with KeepAlive disabled to prevent reused socket hang ups (ECONNRESET)
-const customAgent = new https.Agent({
-    keepAlive: false,
-    timeout: 60000
-});
-
-function request(options, data = null, retries = 5, timeoutMs = 30000) {
+function request(options, data = null, retries = 3, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
         let payload = null;
         if (data !== null && data !== undefined) {
@@ -38,8 +25,7 @@ function request(options, data = null, retries = 5, timeoutMs = 30000) {
         }
 
         const headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Connection': 'close',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
             ...options.headers
         };
 
@@ -47,14 +33,11 @@ function request(options, data = null, retries = 5, timeoutMs = 30000) {
             headers['Content-Length'] = payload.length;
         }
 
-        const reqOptions = {
+        const req = https.request({
             ...options,
-            agent: customAgent,
             headers,
             timeout: timeoutMs
-        };
-
-        const req = https.request(reqOptions, (res) => {
+        }, (res) => {
             let body = '';
             res.on('data', chunk => body += chunk);
             res.on('end', () => {
@@ -71,13 +54,10 @@ function request(options, data = null, retries = 5, timeoutMs = 30000) {
         });
 
         req.on('error', (err) => {
-            req.destroy();
             if (retries > 0) {
-                const backoffMs = Math.min(1000 * Math.pow(2, 5 - retries) + Math.random() * 500, 15000);
-                console.log(`\n⚠️ Request error (${err.message}). Retrying in ${Math.round(backoffMs)}ms (${retries} left)...`);
                 setTimeout(() => {
                     resolve(request(options, data, retries - 1, timeoutMs));
-                }, backoffMs);
+                }, 1500);
             } else {
                 reject(err);
             }
@@ -90,27 +70,19 @@ function request(options, data = null, retries = 5, timeoutMs = 30000) {
     });
 }
 
-function putChunk(urlStr, buffer, retries = 5, timeoutMs = 60000) {
+function putChunk(urlStr, buffer, retries = 3, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
         const url = new URL(urlStr);
-        const isHttps = url.protocol === 'https:';
-        const httpModule = isHttps ? https : http;
-
-        const reqOptions = {
+        const req = https.request({
             hostname: url.hostname,
-            port: url.port || (isHttps ? 443 : 80),
+            port: url.port || 443,
             path: url.pathname + url.search,
             method: 'PUT',
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                'Connection': 'close',
                 'Content-Length': buffer.length
             },
-            agent: isHttps ? customAgent : false,
             timeout: timeoutMs
-        };
-
-        const req = httpModule.request(reqOptions, (res) => {
+        }, (res) => {
             let body = '';
             res.on('data', chunk => body += chunk);
             res.on('end', () => {
@@ -120,9 +92,8 @@ function putChunk(urlStr, buffer, retries = 5, timeoutMs = 60000) {
                         etag: res.headers.etag ? res.headers.etag.replace(/"/g, '') : ''
                     });
                 } else if (retries > 0) {
-                    const backoffMs = Math.min(1500 * Math.pow(2, 5 - retries) + Math.random() * 500, 20000);
-                    console.log(`\n⚠️ Chunk failed with status ${res.statusCode}. Retrying in ${Math.round(backoffMs)}ms (${retries} left)...`);
-                    setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), backoffMs);
+                    console.log(`\n⚠️ Chunk failed with status ${res.statusCode}. Retrying (${retries} left)...`);
+                    setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), 2000);
                 } else {
                     reject(new Error(`Failed to upload chunk: HTTP ${res.statusCode}`));
                 }
@@ -134,11 +105,9 @@ function putChunk(urlStr, buffer, retries = 5, timeoutMs = 60000) {
         });
 
         req.on('error', (err) => {
-            req.destroy();
             if (retries > 0) {
-                const backoffMs = Math.min(1500 * Math.pow(2, 5 - retries) + Math.random() * 500, 20000);
-                console.log(`\n⚠️ Network error: ${err.message}. Retrying in ${Math.round(backoffMs)}ms (${retries} left)...`);
-                setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), backoffMs);
+                console.log(`\n⚠️ Network error: ${err.message}. Retrying (${retries} left)...`);
+                setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), 2000);
             } else {
                 reject(err);
             }
@@ -379,20 +348,20 @@ async function findExistingFileInHamrahi(accessToken, folderId, fileNames, refre
 
             function extractLink(body, fallbackObj) {
                 if (body && typeof body === 'object') {
+                    if (typeof body.link === 'string' && body.link.includes('/o/public/')) return body.link;
+                    if (typeof body.public_link === 'string' && body.public_link.includes('/o/public/')) return body.public_link;
                     if (typeof body.link === 'string') return body.link;
                     if (typeof body.public_link === 'string') return body.public_link;
-                    if (typeof body.download_url === 'string') return body.download_url;
-                    if (typeof body.url === 'string') return body.url;
-                } else if (typeof body === 'string' && body.startsWith('http')) {
+                } else if (typeof body === 'string' && body.includes('/o/public/')) {
                     return body;
                 }
 
                 if (fallbackObj && typeof fallbackObj === 'object') {
-                    if (typeof fallbackObj.download_url === 'string') return fallbackObj.download_url;
-                    if (typeof fallbackObj.public_url === 'string') return fallbackObj.public_url;
-                    if (typeof fallbackObj.link === 'string') return fallbackObj.link;
+                    if (typeof fallbackObj.public_url === 'string' && fallbackObj.public_url.includes('/o/public/')) return fallbackObj.public_url;
+                    if (typeof fallbackObj.link === 'string' && fallbackObj.link.includes('/o/public/')) return fallbackObj.link;
+                    if (typeof fallbackObj.download_url === 'string' && fallbackObj.download_url.includes('/o/public/')) return fallbackObj.download_url;
                 }
-                return '';
+                return (body && body.link) || (body && body.public_link) || '';
             }
 
             const publicLink = extractLink(linkRes.body, found);
@@ -402,7 +371,7 @@ async function findExistingFileInHamrahi(accessToken, folderId, fileNames, refre
                 name: found.name,
                 size: found.size || 0,
                 public_url: publicLink,
-                download_url: typeof found.download_url === 'string' ? found.download_url : publicLink,
+                download_url: publicLink,
                 folder_id: folderId,
                 reused: true
             };
@@ -623,20 +592,19 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
 
     function extractLinkString(body, fallbackObj) {
         if (body && typeof body === 'object') {
+            if (typeof body.link === 'string' && body.link.includes('/o/public/')) return body.link;
+            if (typeof body.public_link === 'string' && body.public_link.includes('/o/public/')) return body.public_link;
             if (typeof body.link === 'string') return body.link;
             if (typeof body.public_link === 'string') return body.public_link;
-            if (typeof body.download_url === 'string') return body.download_url;
-            if (typeof body.url === 'string') return body.url;
-        } else if (typeof body === 'string' && body.startsWith('http')) {
+        } else if (typeof body === 'string' && body.includes('/o/public/')) {
             return body;
         }
 
         if (fallbackObj && typeof fallbackObj === 'object') {
-            if (typeof fallbackObj.download_url === 'string') return fallbackObj.download_url;
-            if (typeof fallbackObj.public_url === 'string') return fallbackObj.public_url;
-            if (typeof fallbackObj.link === 'string') return fallbackObj.link;
+            if (typeof fallbackObj.public_url === 'string' && fallbackObj.public_url.includes('/o/public/')) return fallbackObj.public_url;
+            if (typeof fallbackObj.link === 'string' && fallbackObj.link.includes('/o/public/')) return fallbackObj.link;
         }
-        return '';
+        return (body && body.link) || (body && body.public_link) || '';
     }
 
     const publicLink = extractLinkString(linkRes.body, uploadedFile);
@@ -646,7 +614,7 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
         name: uploadedFile.name,
         size: uploadedFile.size,
         public_url: publicLink,
-        download_url: typeof uploadedFile.download_url === 'string' ? uploadedFile.download_url : publicLink,
+        download_url: publicLink,
         folder_id: parentFolderId,
         created_at: new Date().toISOString()
     };
@@ -754,6 +722,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+    request,
     getAccessToken,
     resolveFolderPath,
     findExistingFileInHamrahi,

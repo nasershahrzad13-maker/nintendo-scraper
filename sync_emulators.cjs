@@ -45,9 +45,21 @@ const REFRESH_TOKEN = params['refresh-token'] || process.env.ABREHAMRAHI_REFRESH
 const DEST_DIR = params['dest-dir'] || path.join(process.cwd(), 'downloads_emulators');
 const SINGLE_SLUG = params['single-slug'] || null;
 
-if (!fs.existsSync(DEST_DIR)) {
-    fs.mkdirSync(DEST_DIR, { recursive: true });
-}
+const OFFICIAL_FALLBACK_URLS = {
+    'ryujinx-1.3.3-win_x64.zip': 'https://git.ryujinx.app/projects/Ryubing/releases/download/1.3.3/ryujinx-1.3.3-win_x64.zip',
+    'ryujinx-1.3.3-linux_x64.tar.gz': 'https://git.ryujinx.app/projects/Ryubing/releases/download/1.3.3/ryujinx-1.3.3-linux_x64.tar.gz',
+    'ryujinx-1.3.3-macos_universal.app.tar.gz': 'https://git.ryujinx.app/projects/Ryubing/releases/download/1.3.3/ryujinx-1.3.3-macos_universal.app.tar.gz',
+    'sudachi-master-win-x64-qt6.zip': 'https://archive.org/download/sudachi-master-2026-09-03-8246830/sudachi-master-2026-09-03-8246830-win-x64-qt6.zip',
+    'sudachi-app-mainline-release.apk': 'https://archive.org/download/Sudachi-apk-1.0.5/app-mainline-release.apk',
+    'sudachi-master-linux-x86_64-qt6.zip': 'https://archive.org/download/sudachi-master-2026-09-03-8246830/sudachi-master-2026-09-03-8246830-linux-x86_64-qt6.zip',
+    'suyu-windows-x86_64.zip': 'https://archive.org/download/suyu-emulator-releases/suyu-windows-x86_64.zip',
+    'suyu-android-v0.0.3.apk': 'https://archive.org/download/suyu-emulator-releases/suyu-android-v0.0.3.apk',
+    'suyu-linux-x86_64.AppImage': 'https://archive.org/download/suyu-emulator-releases/suyu-linux-x86_64.AppImage',
+    'torzu-windows-msvc.zip': 'https://archive.org/download/torzu-switch-emulator/torzu-windows-msvc.zip',
+    'torzu-linux.AppImage': 'https://archive.org/download/torzu-switch-emulator/torzu-linux.AppImage',
+    'Nintendo-Switch-Firmware-21.2.0.zip': 'https://archive.org/download/nintendo-switch-firmware.-21.2.0/Prodkeys.io_Firmware_21.2.0.zip',
+    'prod.keys': 'https://archive.org/download/nspk1901/prod.keys'
+};
 
 /**
  * Make authenticated HTTP request to site API
@@ -290,8 +302,23 @@ async function main() {
                 // Step 2: Download the file locally
                 const localFilePath = path.join(DEST_DIR, fileName);
 
+                let downloadSourceUrl = currentUrl;
+                if (!downloadSourceUrl || downloadSourceUrl.includes('abrehamrahi.ir')) {
+                    downloadSourceUrl = OFFICIAL_FALLBACK_URLS[fileName] || currentUrl;
+                }
+
                 try {
-                    await downloadFileToDisk(currentUrl, localFilePath);
+                    try {
+                        await downloadFileToDisk(downloadSourceUrl, localFilePath);
+                    } catch (dlErr) {
+                        const fallbackUrl = OFFICIAL_FALLBACK_URLS[fileName];
+                        if (fallbackUrl && fallbackUrl !== downloadSourceUrl) {
+                            console.log(`   ⚠️ Download from ${downloadSourceUrl} failed. Retrying with official fallback: ${fallbackUrl}`);
+                            await downloadFileToDisk(fallbackUrl, localFilePath);
+                        } else {
+                            throw dlErr;
+                        }
+                    }
 
                     const stat = fs.statSync(localFilePath);
                     fileSizeBytes = stat.size;
