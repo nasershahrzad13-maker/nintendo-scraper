@@ -162,6 +162,59 @@ async function getAccessToken(tokenInput) {
 }
 
 /**
+ * Generate permanent link for file object
+ * Exactly matching the implementation in refresh_all_game_links.cjs
+ */
+async function createPublicLink(objId, accessToken, refreshToken = null, retries = 2) {
+    let activeToken = accessToken;
+
+    try {
+        let linkRes = await request({
+            hostname: 'abrehamrahi.ir',
+            path: '/api/v2/sharing/public-link/create/',
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${activeToken}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+        }, { obj_id: objId });
+
+        if ((linkRes.status === 401 || (linkRes.body && linkRes.body.code === 'token_not_valid')) && refreshToken) {
+            console.log('🔄 AbreHamrahi token expired. Refreshing token...');
+            activeToken = await getAccessToken(refreshToken);
+            linkRes = await request({
+                hostname: 'abrehamrahi.ir',
+                path: '/api/v2/sharing/public-link/create/',
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${activeToken}`,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
+            }, { obj_id: objId });
+        }
+
+        if (linkRes.status === 200 && linkRes.body?.link) {
+            return linkRes.body.link;
+        }
+
+        if (retries > 0) {
+            await new Promise(r => setTimeout(r, 2000));
+            return createPublicLink(objId, activeToken, refreshToken, retries - 1);
+        }
+
+        throw new Error(`Failed to create public link for file #${objId}: HTTP ${linkRes.status} ${JSON.stringify(linkRes.body)}`);
+    } catch (err) {
+        if (retries > 0) {
+            await new Promise(r => setTimeout(r, 2000));
+            return createPublicLink(objId, activeToken, refreshToken, retries - 1);
+        }
+        throw err;
+    }
+}
+
+/**
  * Resolve or create folder hierarchy recursively (e.g. "Nintendo_Switch/Zelda_TotK/Updates")
  */
 async function resolveFolderPath(accessToken, folderPath, refreshToken = null) {
@@ -316,55 +369,8 @@ async function findExistingFileInHamrahi(accessToken, folderId, fileNames, refre
             console.log(`    ⚡ [CACHE HIT] File "${found.name}" already exists in AbreHamrahi (ID: ${found.id}).`);
             console.log(`    ⏩ Skipping download & packaging - retrieving direct public download link...`);
 
-            // Get or create public link
-            let linkRes = await request({
-                hostname: 'abrehamrahi.ir',
-                path: '/api/v2/sharing/public-link/create/',
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${activeToken}`,
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
-                }
-            }, {
-                obj_id: found.id
-            });
-
-            if ((linkRes.status === 401 || (linkRes.body && linkRes.body.code === 'token_not_valid')) && refreshToken) {
-                activeToken = await getAccessToken(refreshToken);
-                linkRes = await request({
-                    hostname: 'abrehamrahi.ir',
-                    path: '/api/v2/sharing/public-link/create/',
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${activeToken}`,
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    }
-                }, {
-                    obj_id: found.id
-                });
-            }
-
-            function extractLink(body, fallbackObj) {
-                if (body && typeof body === 'object') {
-                    if (typeof body.link === 'string' && body.link.includes('/o/public/')) return body.link;
-                    if (typeof body.public_link === 'string' && body.public_link.includes('/o/public/')) return body.public_link;
-                    if (typeof body.link === 'string') return body.link;
-                    if (typeof body.public_link === 'string') return body.public_link;
-                } else if (typeof body === 'string' && body.includes('/o/public/')) {
-                    return body;
-                }
-
-                if (fallbackObj && typeof fallbackObj === 'object') {
-                    if (typeof fallbackObj.public_url === 'string' && fallbackObj.public_url.includes('/o/public/')) return fallbackObj.public_url;
-                    if (typeof fallbackObj.link === 'string' && fallbackObj.link.includes('/o/public/')) return fallbackObj.link;
-                    if (typeof fallbackObj.download_url === 'string' && fallbackObj.download_url.includes('/o/public/')) return fallbackObj.download_url;
-                }
-                return (body && body.link) || (body && body.public_link) || '';
-            }
-
-            const publicLink = extractLink(linkRes.body, found);
+            // Get or create permanent public link using standardized createPublicLink
+            const publicLink = await createPublicLink(found.id, activeToken, refreshToken);
 
             return {
                 id: found.id,
@@ -566,56 +572,9 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
         console.log(`    🔒 Size verification passed: Remote size (${uploadedFile.size} bytes) exactly matches local file.`);
     }
 
-    // 4. Create Public Link
+    // 4. Create Public Link (Standardized as in refresh_all_game_links.cjs)
     console.log('🔗 Generating public download link...');
-    let linkRes = await request({
-        hostname: 'abrehamrahi.ir',
-        path: '/api/v2/sharing/public-link/create/',
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${activeAccessToken}`,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
-    }, {
-        obj_id: uploadedFile.id
-    });
-
-    if ((linkRes.status === 401 || (linkRes.body && linkRes.body.code === 'token_not_valid')) && refreshToken) {
-        console.log('🔄 Access token expired. Refreshing token and retrying public link creation...');
-        await refreshActiveToken();
-        linkRes = await request({
-            hostname: 'abrehamrahi.ir',
-            path: '/api/v2/sharing/public-link/create/',
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${activeAccessToken}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            }
-        }, {
-            obj_id: uploadedFile.id
-        });
-    }
-
-    function extractLinkString(body, fallbackObj) {
-        if (body && typeof body === 'object') {
-            if (typeof body.link === 'string' && body.link.includes('/o/public/')) return body.link;
-            if (typeof body.public_link === 'string' && body.public_link.includes('/o/public/')) return body.public_link;
-            if (typeof body.link === 'string') return body.link;
-            if (typeof body.public_link === 'string') return body.public_link;
-        } else if (typeof body === 'string' && body.includes('/o/public/')) {
-            return body;
-        }
-
-        if (fallbackObj && typeof fallbackObj === 'object') {
-            if (typeof fallbackObj.public_url === 'string' && fallbackObj.public_url.includes('/o/public/')) return fallbackObj.public_url;
-            if (typeof fallbackObj.link === 'string' && fallbackObj.link.includes('/o/public/')) return fallbackObj.link;
-        }
-        return (body && body.link) || (body && body.public_link) || '';
-    }
-
-    const publicLink = extractLinkString(linkRes.body, uploadedFile);
+    const publicLink = await createPublicLink(uploadedFile.id, activeAccessToken, refreshToken);
 
     return {
         id: uploadedFile.id,
@@ -732,6 +691,7 @@ if (require.main === module) {
 module.exports = {
     request,
     getAccessToken,
+    createPublicLink,
     resolveFolderPath,
     findExistingFileInHamrahi,
     uploadFileToHamrahi,

@@ -638,6 +638,9 @@ function getMirrorScore(url) {
                         }
 
                         if (existingCloudFile) {
+                            if (!existingCloudFile.public_url || !existingCloudFile.public_url.startsWith('http')) {
+                                throw new Error(`Existing cloud file "${existingCloudFile.name}" has invalid/empty public URL!`);
+                            }
                             console.log(`    ⚡ [CACHE HIT] Reusing existing cloud file without re-downloading: ${existingCloudFile.public_url}`);
                             uploadedFiles.push({
                                 file_type: fileTypeKey,
@@ -720,6 +723,11 @@ function getMirrorScore(url) {
                                 if (!partUploadResult) {
                                     partUploadResult = await uploadFileToHamrahi(currentAccessToken, part.path, folderId, part.name, REFRESH_TOKEN);
                                 }
+
+                                if (!partUploadResult || !partUploadResult.public_url || !partUploadResult.public_url.startsWith('http')) {
+                                    throw new Error(`Failed to obtain a valid public download link for part: ${part.name}`);
+                                }
+
                                 console.log(`    🎉 Part ${part.partNumber} Uploaded! Public Link: ${partUploadResult.public_url}`);
 
                                 let partTitle = baseDisplayTitle;
