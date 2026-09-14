@@ -165,8 +165,13 @@ async function getAccessToken(tokenInput) {
  * Generate permanent link for file object
  * Exactly matching the implementation in refresh_all_game_links.cjs
  */
-async function createPublicLink(objId, accessToken, refreshToken = null, retries = 2) {
+async function createPublicLink(objId, accessToken, refreshToken = null, retries = 5, isRetry = false) {
     let activeToken = accessToken;
+
+    // Give AbreHamrahi backend 3 seconds on first call to finalize antivirus/integrity scan
+    if (!isRetry) {
+        await new Promise(r => setTimeout(r, 3000));
+    }
 
     try {
         let linkRes = await request({
@@ -199,16 +204,24 @@ async function createPublicLink(objId, accessToken, refreshToken = null, retries
             return linkRes.body.link;
         }
 
+        // Handle HTTP 406 "You cannot create a public link because this file is unsafe" (temporary scan delay)
+        const isScanPending = linkRes.status === 406 || (linkRes.body && typeof linkRes.body.detail === 'string' && linkRes.body.detail.includes('unsafe'));
+        if (isScanPending && retries > 0) {
+            console.log(`    ⏳ Cloud security scan in progress for file #${objId}. Waiting 6s before retry (${retries} left)...`);
+            await new Promise(r => setTimeout(r, 6000));
+            return createPublicLink(objId, activeToken, refreshToken, retries - 1, true);
+        }
+
         if (retries > 0) {
-            await new Promise(r => setTimeout(r, 2000));
-            return createPublicLink(objId, activeToken, refreshToken, retries - 1);
+            await new Promise(r => setTimeout(r, 3000));
+            return createPublicLink(objId, activeToken, refreshToken, retries - 1, true);
         }
 
         throw new Error(`Failed to create public link for file #${objId}: HTTP ${linkRes.status} ${JSON.stringify(linkRes.body)}`);
     } catch (err) {
         if (retries > 0) {
-            await new Promise(r => setTimeout(r, 2000));
-            return createPublicLink(objId, activeToken, refreshToken, retries - 1);
+            await new Promise(r => setTimeout(r, 3000));
+            return createPublicLink(objId, activeToken, refreshToken, retries - 1, true);
         }
         throw err;
     }
