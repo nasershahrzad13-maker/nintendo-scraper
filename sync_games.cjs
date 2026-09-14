@@ -54,8 +54,11 @@ const REFRESH_TOKEN = params['refresh-token'] || process.env.ABREHAMRAHI_REFRESH
 const DEST_DIR = params['dest-dir'] || path.join(process.cwd(), 'downloads');
 const SINGLE_URL = params['single-url'] || null;
 const ZIP_PASSWORD = params['zip-password'] || process.env.ZIP_PASSWORD || 'ninten2.ir';
-const PART_SIZE_MB = parseInt(params['part-size-mb'] || '2048', 10) || 2048; // 2GB (2048MB) parts
+const PART_SIZE_MB = parseInt(params['part-size-mb'] || '950', 10) || 950; // 950MB parts (AbreHamrahi storage safe limit)
 const BATCH_LIMIT = parseInt(params['limit'] || '50', 10) || 50;
+const FORCE_REUPLOAD = params['force-reupload'] === true || params['force'] === true || process.env.FORCE_REUPLOAD === 'true';
+const MAX_RUN_MINUTES = parseInt(params['max-time-minutes'] || process.env.MAX_RUN_MINUTES || '60', 10) || 60; // Soft time limit in minutes
+const RUN_START_TIME = Date.now();
 
 /**
  * Package and split file into 2GB password-protected parts if file exceeds 2GB (PART_SIZE_MB)
@@ -95,9 +98,9 @@ function createProtectedParts(sourceFilePath, destDir, baseName, password = ZIP_
         if (hasRar) {
             try {
                 // Standard RAR multi-volume format (.part1.rar, .part2.rar, etc.)
-                // -m0 (Store mode, zero compression delay) + -p (password) + -ep1 (exclude paths) -y (assume yes)
+                // -m0 (Store mode, zero compression delay) + -p (password) + -ep1 (exclude paths) + -rr3p (3% recovery record) -y (assume yes)
                 const outputBase = path.join(destDir, `${cleanBaseName}.rar`);
-                const cmd = `rar a -v${splitSizeMb}m -m0 -p"${password}" -ep1 -y "${outputBase}" "${sourceFilePath}"`;
+                const cmd = `rar a -v${splitSizeMb}m -m0 -rr3p -p"${password}" -ep1 -y "${outputBase}" "${sourceFilePath}"`;
                 execSync(cmd, { stdio: 'inherit' });
 
                 const createdFiles = fs.readdirSync(destDir)
@@ -172,7 +175,7 @@ function createProtectedParts(sourceFilePath, destDir, baseName, password = ZIP_
         // Single part archive (under 2GB) -> use .rar or .zip
         if (hasRar) {
             const outputRar = path.join(destDir, `${cleanBaseName}.rar`);
-            const cmd = `rar a -m0 -p"${password}" -ep1 -idq "${outputRar}" "${sourceFilePath}"`;
+            const cmd = `rar a -m0 -rr3p -p"${password}" -ep1 -idq "${outputRar}" "${sourceFilePath}"`;
             execSync(cmd, { stdio: 'ignore' });
             const outStats = fs.statSync(outputRar);
             parts.push({
@@ -245,20 +248,23 @@ function verifyArchiveParts(parts, password = ZIP_PASSWORD) {
 
     if (format === 'RAR') {
         try {
-            // rar t -p"password" -idq "firstPartPath"
-            const cmd = `rar t -p"${password}" -idq "${firstPath}"`;
-            execSync(cmd, { stdio: 'ignore' });
-            console.log(`    ✅ RAR archive integrity test PASSED (${parts.length} part(s) verified).`);
+            // Test archive from first part (RAR traverses through all subsequent parts .part2.rar, etc.)
+            // -y (assume yes) and remove -idq to catch stderr if test fails
+            const cmd = `rar t -p"${password}" -y "${firstPath}"`;
+            execSync(cmd, { stdio: 'pipe' });
+            console.log(`    ✅ RAR archive integrity test PASSED (${parts.length} part(s) verified end-to-end).`);
         } catch (err) {
-            throw new Error(`RAR archive integrity check failed for ${firstPart.name}: ${err.message}`);
+            const stderrMsg = err.stderr ? err.stderr.toString('utf-8') : err.message;
+            throw new Error(`RAR archive integrity check failed for ${firstPart.name}: ${stderrMsg}`);
         }
     } else if (format === '7Z') {
         try {
-            const cmd = `7z t -p"${password}" "${firstPath}"`;
-            execSync(cmd, { stdio: 'ignore' });
-            console.log(`    ✅ 7Z archive integrity test PASSED (${parts.length} part(s) verified).`);
+            const cmd = `7z t -p"${password}" -y "${firstPath}"`;
+            execSync(cmd, { stdio: 'pipe' });
+            console.log(`    ✅ 7Z archive integrity test PASSED (${parts.length} part(s) verified end-to-end).`);
         } catch (err) {
-            throw new Error(`7Z archive integrity check failed for ${firstPart.name}: ${err.message}`);
+            const stderrMsg = err.stderr ? err.stderr.toString('utf-8') : err.message;
+            throw new Error(`7Z archive integrity check failed for ${firstPart.name}: ${stderrMsg}`);
         }
     } else if (format === 'ZIP') {
         try {
@@ -266,11 +272,12 @@ function verifyArchiveParts(parts, password = ZIP_PASSWORD) {
             try { execSync('which unzip', { stdio: 'ignore' }); hasUnzip = true; } catch {}
             const testCmd = hasUnzip
                 ? `unzip -t -P "${password}" "${firstPath}"`
-                : `7z t -p"${password}" "${firstPath}"`;
-            execSync(testCmd, { stdio: 'ignore' });
+                : `7z t -p"${password}" -y "${firstPath}"`;
+            execSync(testCmd, { stdio: 'pipe' });
             console.log(`    ✅ ZIP archive integrity test PASSED.`);
         } catch (err) {
-            throw new Error(`ZIP archive integrity check failed for ${firstPart.name}: ${err.message}`);
+            const stderrMsg = err.stderr ? err.stderr.toString('utf-8') : err.message;
+            throw new Error(`ZIP archive integrity check failed for ${firstPart.name}: ${stderrMsg}`);
         }
     }
 }
@@ -603,8 +610,13 @@ function getMirrorScore(url) {
                         ];
 
                         // Check if file already exists in AbreHamrahi
-                        console.log(`    🔍 Checking if file already exists on AbreHamrahi Cloud...`);
-                        let existingCloudFile = await findExistingFileInHamrahi(currentAccessToken, folderId, candidateNames, REFRESH_TOKEN);
+                        let existingCloudFile = null;
+                        if (!FORCE_REUPLOAD) {
+                            console.log(`    🔍 Checking if file already exists on AbreHamrahi Cloud...`);
+                            existingCloudFile = await findExistingFileInHamrahi(currentAccessToken, folderId, candidateNames, REFRESH_TOKEN);
+                        } else {
+                            console.log(`    ⚡ [FORCE RE-UPLOAD] Skipping cloud cache check - will re-download, split into 950MB parts & re-upload.`);
+                        }
 
                         let fileTypeKey = 'base_game';
                         if (fileItem.type === 'Update') fileTypeKey = 'update';
@@ -696,7 +708,15 @@ function getMirrorScore(url) {
                                 const part = generatedParts[pIdx];
                                 console.log(`    ☁️ Uploading Part ${part.partNumber}/${part.totalParts}: "${part.name}" (${formatBytes(part.size)})...`);
 
-                                let partUploadResult = await findExistingFileInHamrahi(currentAccessToken, folderId, [part.name], REFRESH_TOKEN);
+                                let partUploadResult = null;
+                                if (!FORCE_REUPLOAD) {
+                                    const existingPart = await findExistingFileInHamrahi(currentAccessToken, folderId, [part.name], REFRESH_TOKEN);
+                                    if (existingPart && existingPart.size === part.size) {
+                                        partUploadResult = existingPart;
+                                        console.log(`    ⚡ Reusing existing verified part on cloud: ${part.name}`);
+                                    }
+                                }
+
                                 if (!partUploadResult) {
                                     partUploadResult = await uploadFileToHamrahi(currentAccessToken, part.path, folderId, part.name, REFRESH_TOKEN);
                                 }
@@ -793,6 +813,14 @@ function getMirrorScore(url) {
                     console.error(`Failed to report error to API: ${failApiErr.message}`);
                 }
             }
+        }
+
+        // Soft time limit check: Allow current game to completely finish, but don't start a new game if time exceeded
+        const elapsedMinutes = (Date.now() - RUN_START_TIME) / 60000;
+        if (elapsedMinutes >= MAX_RUN_MINUTES) {
+            console.log(`\n⏱️ Time limit reached (${elapsedMinutes.toFixed(1)}m >= ${MAX_RUN_MINUTES}m limit).`);
+            console.log(`🛑 Current game finished cleanly. Gracefully stopping worker until next scheduled cron run.`);
+            break;
         }
     }
 

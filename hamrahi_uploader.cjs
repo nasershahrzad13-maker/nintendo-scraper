@@ -298,16 +298,16 @@ async function findExistingFileInHamrahi(accessToken, folderId, fileNames, refre
     if (listRes.status === 200 && Array.isArray(listRes.body.results)) {
         const filesInFolder = listRes.body.results.filter(item => item.type === 'file');
 
-        // 1. Exact match on any candidate name
+        // 1. Exact match on candidate name (with extension)
         let found = filesInFolder.find(item => candidateList.includes(item.name.toLowerCase()));
 
-        // 2. Fuzzy match: same base name without extension (must also be > 10MB to avoid incomplete corrupt uploads)
+        // 2. Strict base name match (exact base match without extension, > 10MB)
         if (!found) {
             found = filesInFolder.find(item => {
                 const itemBase = item.name.replace(/\.[a-zA-Z0-9]+$/, '').toLowerCase();
                 return candidateList.some(cand => {
                     const candBase = cand.replace(/\.[a-zA-Z0-9]+$/, '').toLowerCase();
-                    return itemBase === candBase || itemBase.includes(candBase) || candBase.includes(itemBase);
+                    return itemBase === candBase;
                 }) && (item.size && item.size > 10485760);
             });
         }
@@ -526,7 +526,7 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
         parent: parentFolderId,
         upload_id: upload_id,
         parts: completedParts,
-        force_overwrite: false
+        force_overwrite: true
     });
 
     if ((completeRes.status === 401 || (completeRes.body && completeRes.body.code === 'token_not_valid')) && refreshToken) {
@@ -547,7 +547,7 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
             parent: parentFolderId,
             upload_id: upload_id,
             parts: completedParts,
-            force_overwrite: false
+            force_overwrite: true
         });
     }
 
@@ -557,6 +557,14 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
 
     const uploadedFile = completeRes.body;
     console.log(`✨ File saved successfully (ID: ${uploadedFile.id})`);
+
+    // Strict validation: Verify uploaded size matches local file size
+    if (uploadedFile && typeof uploadedFile.size === 'number') {
+        if (uploadedFile.size !== fileSize) {
+            throw new Error(`Upload size mismatch for "${fileName}"! Local: ${fileSize} bytes, Remote: ${uploadedFile.size} bytes. Upload is truncated or incomplete!`);
+        }
+        console.log(`    🔒 Size verification passed: Remote size (${uploadedFile.size} bytes) exactly matches local file.`);
+    }
 
     // 4. Create Public Link
     console.log('🔗 Generating public download link...');

@@ -1045,6 +1045,9 @@ function downloadFile(urlStr, destPath, options = {}) {
 
             res.on('end', () => {
                 fileStream.end();
+            });
+
+            fileStream.on('finish', () => {
                 resolve({
                     destPath,
                     finalFilename,
@@ -1052,8 +1055,12 @@ function downloadFile(urlStr, destPath, options = {}) {
                 });
             });
 
+            fileStream.on('error', err => {
+                reject(err);
+            });
+
             res.on('error', err => {
-                fileStream.end();
+                fileStream.destroy();
                 reject(err);
             });
         });
