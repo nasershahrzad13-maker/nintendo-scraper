@@ -350,6 +350,164 @@ function apiRequest(endpoint, method = 'GET', data = null) {
 }
 
 /**
+ * Detect file format via Magic Bytes header inspection
+ */
+function inspectFileMagicBytes(filePath) {
+    if (!fs.existsSync(filePath)) return { type: 'unknown', description: 'File does not exist' };
+    
+    try {
+        const buf = Buffer.alloc(1024);
+        const fd = fs.openSync(filePath, 'r');
+        const bytesRead = fs.readSync(fd, buf, 0, 1024, 0);
+        fs.closeSync(fd);
+
+        if (bytesRead < 16) return { type: 'corrupt', description: 'File too small' };
+
+        // 1. Check NSP / NSZ (PFS0 Header at 0x00: 'PFS0' -> 0x50 0x46 0x53 0x30)
+        if (buf[0] === 0x50 && buf[1] === 0x46 && buf[2] === 0x53 && buf[3] === 0x30) {
+            return { type: 'NSP', description: 'Nintendo Switch PFS0 Container (NSP/NSZ)' };
+        }
+
+        // 2. Check XCI (HEAD Magic at 0x100: 'HEAD' -> 0x48 0x45 0x41 0x44)
+        if (bytesRead >= 0x104 && buf[0x100] === 0x48 && buf[0x101] === 0x45 && buf[0x102] === 0x41 && buf[0x103] === 0x44) {
+            return { type: 'XCI', description: 'Nintendo Switch Game Card Image (XCI/XCZ)' };
+        }
+
+        // 3. Check RAR Archive ('Rar!' -> 0x52 0x61 0x72 0x21)
+        if (buf[0] === 0x52 && buf[1] === 0x61 && buf[2] === 0x72 && buf[3] === 0x21) {
+            return { type: 'RAR', description: 'RAR Compressed Archive' };
+        }
+
+        // 4. Check 7Z Archive ('7z¼¯' -> 0x37 0x7A 0xBC 0xAF)
+        if (buf[0] === 0x37 && buf[1] === 0x7A && buf[2] === 0xBC && buf[3] === 0xAF) {
+            return { type: '7Z', description: '7-Zip Compressed Archive' };
+        }
+
+        // 5. Check ZIP Archive ('PK\x03\x04' -> 0x50 0x4B 0x03 0x04)
+        if (buf[0] === 0x50 && buf[1] === 0x4B && buf[2] === 0x03 && buf[3] === 0x04) {
+            return { type: 'ZIP', description: 'ZIP Compressed Archive' };
+        }
+
+        // 6. Check HTML Error Page
+        const headerStr = buf.toString('utf-8', 0, bytesRead).toLowerCase();
+        if (headerStr.includes('<html') || headerStr.includes('<!doctype html') || headerStr.includes('403 forbidden') || headerStr.includes('access denied')) {
+            return { type: 'HTML', description: 'HTML Error Page' };
+        }
+
+        return { type: 'UNKNOWN', description: `Unknown File Format (Header: ${buf.slice(0, 8).toString('hex')})` };
+    } catch (e) {
+        return { type: 'error', description: `Read error: ${e.message}` };
+    }
+}
+
+/**
+ * Ensures the downloaded file is a valid raw Switch ROM (.nsp/.xci/.nsz).
+ * If the downloaded file is an archive (.rar, .7z, .zip), it automatically extracts
+ * the inner ROM file and returns the path to the extracted .nsp/.xci file.
+ */
+function processAndValidateRomFile(filePath, destDir) {
+    let magic = inspectFileMagicBytes(filePath);
+    console.log(`    🔍 File format detection: ${magic.description} (${magic.type})`);
+
+    if (magic.type === 'HTML') {
+        throw new Error('Downloaded file is an HTML error page from storage server.');
+    }
+
+    // If it's already a valid NSP or XCI, return it directly
+    if (magic.type === 'NSP' || magic.type === 'XCI') {
+        console.log(`    ✅ Verified valid Nintendo Switch ${magic.type} header magic bytes.`);
+        return filePath;
+    }
+
+    // If it's a compressed archive (RAR, 7Z, ZIP), extract the inner ROM
+    if (magic.type === 'RAR' || magic.type === '7Z' || magic.type === 'ZIP') {
+        console.log(`    📦 Source download is a compressed ${magic.type} archive. Extracting inner Nintendo Switch ROM...`);
+        
+        const extractSubDir = path.join(destDir, `extract_${Date.now()}`);
+        fs.mkdirSync(extractSubDir, { recursive: true });
+
+        let extracted = false;
+        try {
+            if (magic.type === 'RAR') {
+                let hasRar = false;
+                try { execSync('which rar || which unrar', { stdio: 'ignore' }); hasRar = true; } catch {}
+                if (hasRar) {
+                    try {
+                        execSync(`rar x -o+ -y "${filePath}" "${extractSubDir}/"`, { stdio: 'pipe' });
+                        extracted = true;
+                    } catch {
+                        execSync(`unrar x -o+ -y "${filePath}" "${extractSubDir}/"`, { stdio: 'pipe' });
+                        extracted = true;
+                    }
+                } else {
+                    execSync(`7z x -y -o"${extractSubDir}" "${filePath}"`, { stdio: 'pipe' });
+                    extracted = true;
+                }
+            } else if (magic.type === '7Z') {
+                execSync(`7z x -y -o"${extractSubDir}" "${filePath}"`, { stdio: 'pipe' });
+                extracted = true;
+            } else if (magic.type === 'ZIP') {
+                try {
+                    execSync(`unzip -o "${filePath}" -d "${extractSubDir}"`, { stdio: 'pipe' });
+                    extracted = true;
+                } catch {
+                    execSync(`7z x -y -o"${extractSubDir}" "${filePath}"`, { stdio: 'pipe' });
+                    extracted = true;
+                }
+            }
+        } catch (extErr) {
+            // Try fallback 7z for any archive format
+            try {
+                execSync(`7z x -y -o"${extractSubDir}" "${filePath}"`, { stdio: 'pipe' });
+                extracted = true;
+            } catch (fallbackErr) {
+                throw new Error(`Failed to extract source ${magic.type} archive: ${extErr.message}`);
+            }
+        }
+
+        // Recursively find extracted NSP, XCI, or NSZ file
+        const findRomFiles = (dir) => {
+            let results = [];
+            const list = fs.readdirSync(dir);
+            for (const f of list) {
+                const fullPath = path.join(dir, f);
+                const stat = fs.statSync(fullPath);
+                if (stat.isDirectory()) {
+                    results = results.concat(findRomFiles(fullPath));
+                } else if (/\.(nsp|xci|nsz|xcz)$/i.test(f) || stat.size > 30 * 1024 * 1024) {
+                    results.push(fullPath);
+                }
+            }
+            return results;
+        };
+
+        const candidates = findRomFiles(extractSubDir);
+        if (candidates.length === 0) {
+            throw new Error(`Archive extracted successfully but no .nsp, .xci, or .nsz file was found inside.`);
+        }
+
+        // Pick largest candidate file (the main ROM)
+        candidates.sort((a, b) => fs.statSync(b).size - fs.statSync(a).size);
+        const extractedRomPath = candidates[0];
+
+        // Validate extracted ROM's magic bytes
+        const extractedMagic = inspectFileMagicBytes(extractedRomPath);
+        if (extractedMagic.type !== 'NSP' && extractedMagic.type !== 'XCI') {
+            throw new Error(`Extracted file (${path.basename(extractedRomPath)}) is not a valid Nintendo Switch ROM (${extractedMagic.description}). Signature check failed.`);
+        }
+
+        console.log(`    ✅ Extracted inner ROM: "${path.basename(extractedRomPath)}" (${formatBytes(fs.statSync(extractedRomPath).size)}) [${extractedMagic.type}]`);
+        
+        // Remove original source archive file
+        try { fs.unlinkSync(filePath); } catch {}
+
+        return extractedRomPath;
+    }
+
+    throw new Error(`Downloaded file is invalid or unreadable: ${magic.description}`);
+}
+
+/**
  * Validate that downloaded file is a real game file and not an HTML error / 403 page
  */
 function validateDownloadedRom(filePath) {
@@ -360,17 +518,9 @@ function validateDownloadedRom(filePath) {
     const stats = fs.statSync(filePath);
     if (stats.size < 1048576) { // Less than 1MB
         // Check if it is HTML
-        try {
-            const buf = Buffer.alloc(1024);
-            const fd = fs.openSync(filePath, 'r');
-            fs.readSync(fd, buf, 0, 1024, 0);
-            fs.closeSync(fd);
-            const str = buf.toString('utf-8').toLowerCase();
-            if (str.includes('<html') || str.includes('<!doctype html') || str.includes('403 forbidden') || str.includes('access denied')) {
-                throw new Error(`File is an HTML error page (${formatBytes(stats.size)}), not a valid ROM. Server returned 403 Forbidden or link expired.`);
-            }
-        } catch (e) {
-            if (e.message.includes('HTML error page')) throw e;
+        const magic = inspectFileMagicBytes(filePath);
+        if (magic.type === 'HTML') {
+            throw new Error(`File is an HTML error page (${formatBytes(stats.size)}), not a valid ROM. Server returned 403 Forbidden or link expired.`);
         }
         throw new Error(`Downloaded file is suspiciously small (${formatBytes(stats.size)}). Expected Nintendo Switch ROM (> 50MB).`);
     }
@@ -387,11 +537,11 @@ async function downloadRomFile(url, destPath) {
     } catch {}
 
     if (hasAria2) {
-        console.log(`    ⚡ Downloading via Aria2 Multi-Connection Accelerator: ${url}`);
+        console.log(`    ⚡ Downloading via Aria2 Accelerator: ${url}`);
         const destDir = path.dirname(destPath);
         const destFile = path.basename(destPath);
 
-        const ariaCmd = `aria2c -x 8 -s 8 -j 1 -k 1M --max-connection-per-server=8 --retry-wait=3 --file-allocation=none --dir="${destDir}" --out="${destFile}" "${url}"`;
+        const ariaCmd = `aria2c -x 4 -s 4 -j 1 -k 1M --max-connection-per-server=4 --retry-wait=3 --file-allocation=none --dir="${destDir}" --out="${destFile}" "${url}"`;
         execSync(ariaCmd, { stdio: 'inherit' });
 
         validateDownloadedRom(destPath);
@@ -666,7 +816,7 @@ function getMirrorScore(url) {
                             let downloadedFilePath = null;
 
                             const tempExt = fileItem.format ? `.${fileItem.format.toLowerCase()}` : '.nsp';
-                            const tempDownloadName = `temp_${Date.now()}_${cleanFolderName(gameData.title)}_${i + 1}${tempExt}`;
+                            const tempDownloadName = `download_${Date.now()}_${cleanFolderName(gameData.title)}${tempExt}`;
                             const tempLocalFilePath = path.join(DEST_DIR, tempDownloadName);
 
                             for (let mIdx = 0; mIdx < fileItem.mirrors.length; mIdx++) {
@@ -696,14 +846,18 @@ function getMirrorScore(url) {
                                 throw lastDlError || new Error(`All ${fileItem.mirrors.length} mirror(s) failed for file: ${fileItem.name}`);
                             }
 
-                            // Step B: Package & split into 2GB password-protected parts (.part1.rar, .part2.rar)
-                            console.log(`    🔒 Packaging into RAR format with password '${ZIP_PASSWORD}'...`);
-                            const generatedParts = createProtectedParts(downloadedFilePath, DEST_DIR, baseRarName, ZIP_PASSWORD, PART_SIZE_MB);
+                            // Step B: Validate header magic bytes & auto-extract source RAR/ZIP if required
+                            console.log(`    🔍 Inspecting file header & magic bytes...`);
+                            const validRomPath = processAndValidateRomFile(downloadedFilePath, DEST_DIR);
+
+                            // Step C: Package & split into 2GB password-protected parts (.part1.rar, .part2.rar)
+                            console.log(`    🔒 Packaging clean ROM into RAR format with password '${ZIP_PASSWORD}'...`);
+                            const generatedParts = createProtectedParts(validRomPath, DEST_DIR, baseRarName, ZIP_PASSWORD, PART_SIZE_MB);
                             console.log(`    📦 Generated ${generatedParts.length} part(s).`);
 
-                            // Clean up temporary downloaded source file
-                            if (fs.existsSync(downloadedFilePath)) {
-                                fs.unlinkSync(downloadedFilePath);
+                            // Clean up temporary downloaded/extracted source file
+                            if (fs.existsSync(validRomPath)) {
+                                try { fs.unlinkSync(validRomPath); } catch {}
                             }
 
                             // Step C: Upload all parts to AbreHamrahi Cloud

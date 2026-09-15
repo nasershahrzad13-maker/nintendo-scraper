@@ -225,7 +225,7 @@ function generateRomFilename(gameTitle, item, extOverride = null) {
         }
     }
 
-    return `${base}${typeSuffix}${ext}`;
+    return `${base}${typeSuffix}_ninten2_ir${ext}`;
 }
 
 /**
