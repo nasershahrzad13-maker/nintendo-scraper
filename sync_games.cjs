@@ -516,13 +516,13 @@ function validateDownloadedRom(filePath) {
     }
 
     const stats = fs.statSync(filePath);
-    if (stats.size < 1048576) { // Less than 1MB
+    if (stats.size < 100) { // Less than 100 bytes
         // Check if it is HTML
         const magic = inspectFileMagicBytes(filePath);
         if (magic.type === 'HTML') {
             throw new Error(`File is an HTML error page (${formatBytes(stats.size)}), not a valid ROM. Server returned 403 Forbidden or link expired.`);
         }
-        throw new Error(`Downloaded file is suspiciously small (${formatBytes(stats.size)}). Expected Nintendo Switch ROM (> 50MB).`);
+        throw new Error(`Downloaded file is suspiciously small (${formatBytes(stats.size)}). Expected valid file (> 100 B).`);
     }
 }
 
@@ -748,6 +748,7 @@ function getMirrorScore(url) {
                         const candidateNames = [
                             baseRarName,
                             `${cleanBaseName}.part1.rar`,
+                            `${cleanBaseName}.part01.rar`,
                             `${cleanBaseName}.rar`,
                             `${cleanBaseName}.zip`,
                             `${cleanBaseName}.7z.001`,

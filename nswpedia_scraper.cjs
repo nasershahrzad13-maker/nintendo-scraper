@@ -223,6 +223,14 @@ function generateRomFilename(gameTitle, item, extOverride = null) {
         } else {
             typeSuffix = '_DLC';
         }
+    } else if (!isGeneric) {
+        // Differentiate Base Game variants, mods, or patches (e.g., "Base Game JP", "MOD Ultrawide")
+        let variantPart = raw.replace(new RegExp(gameTitle.replace(/[^a-zA-Z0-9]/g, '.*'), 'gi'), '').trim();
+        variantPart = variantPart.replace(/^base\s*game\s*/i, '').trim();
+        variantPart = variantPart.replace(/[^a-zA-Z0-9_\- ]/g, ' ').trim().replace(/\s+/g, '_');
+        if (variantPart && !/^(base_game|game|rom)$/i.test(variantPart)) {
+            typeSuffix = `_${variantPart}`.replace(/_+/g, '_');
+        }
     }
 
     return `${base}${typeSuffix}_ninten2_ir${ext}`;
