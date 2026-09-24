@@ -23,6 +23,7 @@ const { execSync } = require('child_process');
 const {
     scrapeGame,
     downloadFile,
+    resolveShareZipDirectLink,
     cleanGameTitle,
     cleanDlcDisplayName,
     generateRomFilename,
@@ -668,6 +669,8 @@ function getMirrorScore(url) {
     const u = url.toLowerCase();
     if (u.includes('nswpediax.site') || u.includes('invalid') || u.includes('placeholder')) return -100;
     if (u.includes('dlsitex.online')) return 110;
+    if (u.includes('share.248916b01b1deb581bfed0113d9b482d.r2.cloudflarestorage.com') || u.includes('r2.cloudflarestorage.com')) return 105;
+    if (u.includes('share.zip')) return 102;
     if (u.includes('vikingfile.com')) return 100;
     if (u.includes('1fichier.com')) return 85;
     if (u.includes('mediafire.com')) return 80;
@@ -822,7 +825,21 @@ function getMirrorScore(url) {
 
                             for (let mIdx = 0; mIdx < fileItem.mirrors.length; mIdx++) {
                                 const currentMirror = fileItem.mirrors[mIdx];
-                                const sourceUrl = currentMirror.directUrl;
+                                let sourceUrl = currentMirror.directUrl;
+
+                                // If sourceUrl is a share.zip page link, automatically resolve captcha to direct storage URL
+                                if (sourceUrl && sourceUrl.includes('share.zip/file/')) {
+                                    try {
+                                        console.log(`    🔐 Resolving share.zip Captcha for mirror ${mIdx + 1}...`);
+                                        const resolved = await resolveShareZipDirectLink(sourceUrl);
+                                        if (resolved) {
+                                            sourceUrl = resolved;
+                                        }
+                                    } catch (szErr) {
+                                        console.warn(`    ⚠️ Failed to solve share.zip captcha for mirror ${mIdx + 1}: ${szErr.message}`);
+                                    }
+                                }
+
                                 console.log(`    📥 [Mirror ${mIdx + 1}/${fileItem.mirrors.length}] Trying source: ${sourceUrl} (${currentMirror.server || 'Direct'})`);
                                 console.log(`    Saving temporary download to: ${tempLocalFilePath}`);
 

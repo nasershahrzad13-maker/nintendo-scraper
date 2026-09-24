@@ -16,6 +16,8 @@ const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const zlib = require('zlib');
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -470,6 +472,218 @@ async function getLatestGames(page = 1, limit = 12, source = 'all') {
 }
 
 /**
+ * Solve Cap challenge PoW (Proof of Work)
+ */
+function solveCapChallenge(token, chal) {
+    function Se(D, y) {
+        let n = (function(h) {
+            let p = 2166136261;
+            for (let g = 0; g < h.length; g++) {
+                p ^= h.charCodeAt(g);
+                p += (p << 1) + (p << 4) + (p << 7) + (p << 8) + (p << 24);
+            }
+            return p >>> 0;
+        })(D);
+        let s = '';
+        function u() {
+            n ^= n << 13;
+            n ^= n >>> 17;
+            n ^= n << 5;
+            return n >>> 0;
+        }
+        for (; s.length < y; ) s += u().toString(16).padStart(8, '0');
+        return s.substring(0, y);
+    }
+
+    function solveSingle(salt, targetHex) {
+        const targetLen = targetHex.length * 4;
+        const targetBytesLen = Math.floor(targetLen / 8);
+        const remBits = targetLen % 8;
+        const paddedHex = targetHex.length % 2 === 0 ? targetHex : targetHex + '0';
+        const targetBytes = Buffer.from(paddedHex, 'hex');
+        const mask = remBits > 0 ? (255 << (8 - remBits)) & 255 : 0;
+
+        let nonce = 0;
+        while (true) {
+            const str = salt + nonce;
+            const hash = crypto.createHash('sha256').update(str).digest();
+            let match = true;
+            for (let i = 0; i < targetBytesLen; i++) {
+                if (hash[i] !== targetBytes[i]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match && remBits > 0) {
+                if ((hash[targetBytesLen] & mask) !== (targetBytes[targetBytesLen] & mask)) {
+                    match = false;
+                }
+            }
+            if (match) return nonce;
+            nonce++;
+        }
+    }
+
+    const challenges = [];
+    let Ue = 0;
+    for (let i = 0; i < chal.c; i++) {
+        Ue++;
+        challenges.push([Se(`${token}${Ue}`, chal.s), Se(`${token}${Ue}d`, chal.d)]);
+    }
+
+    return challenges.map(([salt, target]) => solveSingle(salt, target));
+}
+
+/**
+ * Execute dynamic math state calculation from Cap instrumentation script
+ */
+function runCapInstrumentation(code) {
+    const nonceMatch = code.match(/nonce:\"([a-f0-9]+)\"/);
+    const nonce = nonceMatch ? nonceMatch[1] : null;
+
+    class FakeElement {
+        constructor() {
+            this.children = [];
+            this.parentNode = null;
+            this.innerText = '';
+            this.style = {};
+        }
+        appendChild(c) {
+            this.children.push(c);
+            c.parentNode = this;
+            return c;
+        }
+        removeChild(c) {
+            const idx = this.children.indexOf(c);
+            if (idx !== -1) {
+                this.children.splice(idx, 1);
+                c.parentNode = null;
+            }
+            return c;
+        }
+        get lastElementChild() {
+            return this.children.length > 0 ? this.children[this.children.length - 1] : null;
+        }
+    }
+
+    const document = {
+        createElement: () => new FakeElement(),
+        body: new FakeElement()
+    };
+    const navigator = {
+        userAgent: USER_AGENT
+    };
+
+    const mathBlockMatch = code.match(/(var\s+[a-z0-9]+=\d+;var\s+[a-z0-9]+=\d+;[\s\S]*?return\s+[a-z0-9]+;\s*\}\)\(\);)/);
+    if (!mathBlockMatch) {
+        throw new Error('Cap instrumentation math block not matched');
+    }
+
+    const mathCode = mathBlockMatch[1];
+    const cleanCode = mathCode.replace(/return\s+([a-z0-9]+);\s*\}\)\(\);/, 'return $1;');
+    const fn = new Function('document', 'navigator', cleanCode);
+    const state = fn(document, navigator);
+
+    return {
+        i: nonce,
+        state,
+        ts: Date.now()
+    };
+}
+
+/**
+ * Automatically solve Cap captcha on share.zip and resolve direct Cloudflare R2 / S3 download link
+ */
+async function resolveShareZipDirectLink(shareZipUrl) {
+    const m = shareZipUrl.match(/\/file\/([a-f0-9\-]+)/i);
+    if (!m) return null;
+    const publicId = m[1];
+
+    function sendShareZipRequest(url, options = {}, body = null) {
+        return new Promise((resolve, reject) => {
+            const u = new URL(url);
+            const headers = {
+                'User-Agent': USER_AGENT,
+                'Accept': 'application/json, text/plain, */*',
+                'Origin': 'https://share.zip',
+                'Referer': shareZipUrl,
+                ...options.headers
+            };
+            if (body) headers['Content-Type'] = 'application/json';
+            const req = https.request(u, {
+                method: options.method || 'GET',
+                headers
+            }, res => {
+                let data = '';
+                res.on('data', c => data += c);
+                res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
+            });
+            req.on('error', reject);
+            if (body) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+            req.end();
+        });
+    }
+
+    // 1. Request Cap challenge
+    const chalRes = await sendShareZipRequest('https://api.share.zip/api/v1/cap/challenge', { method: 'POST' });
+    if (chalRes.status !== 201 && chalRes.status !== 200) {
+        throw new Error(`Failed to request Cap challenge: HTTP ${chalRes.status}`);
+    }
+    const chalData = JSON.parse(chalRes.body);
+
+    // 2. Solve PoW
+    const solutions = solveCapChallenge(chalData.token, chalData.challenge);
+
+    // 3. Solve Instrumentation
+    let instrResult = null;
+    if (chalData.instrumentation) {
+        const buf = Buffer.from(chalData.instrumentation, 'base64');
+        const rawInstr = zlib.inflateRawSync(buf).toString('utf-8');
+        instrResult = runCapInstrumentation(rawInstr);
+    }
+
+    // 4. Redeem Cap Token
+    const redeemRes = await sendShareZipRequest('https://api.share.zip/api/v1/cap/redeem', { method: 'POST' }, {
+        token: chalData.token,
+        solutions,
+        instr: instrResult
+    });
+    if (redeemRes.status !== 201 && redeemRes.status !== 200) {
+        throw new Error(`Failed to redeem Cap token: HTTP ${redeemRes.status} ${redeemRes.body}`);
+    }
+    const redeemData = JSON.parse(redeemRes.body);
+    if (!redeemData.success || !redeemData.token) {
+        throw new Error(`Cap token rejected: ${redeemRes.body}`);
+    }
+
+    // 5. Request download URL using Cap Token
+    const dlRes = await sendShareZipRequest(`https://api.share.zip/api/v1/public/files/${publicId}/download`, { method: 'POST' }, {
+        capToken: redeemData.token
+    });
+    if (dlRes.status !== 201 && dlRes.status !== 200) {
+        throw new Error(`Failed to generate share.zip download URL: HTTP ${dlRes.status}`);
+    }
+    const dlData = JSON.parse(dlRes.body);
+    if (!dlData.downloadUrl) {
+        throw new Error('No downloadUrl returned by share.zip API');
+    }
+
+    // 6. Follow redirect to obtain direct S3 / R2 storage download URL
+    const redirectRes = await new Promise((resolve, reject) => {
+        https.get(dlData.downloadUrl, {
+            headers: {
+                'User-Agent': USER_AGENT,
+                'Referer': 'https://share.zip/'
+            }
+        }, res => {
+            resolve({ status: res.statusCode, location: res.headers.location });
+        }).on('error', reject);
+    });
+
+    return redirectRes.location || dlData.downloadUrl;
+}
+
+/**
  * Resolve direct download storage link from intermediate NSWPedia / NSVault / Dlsitex download URL
  */
 async function resolveDirectDownloadLink(downloadListUrl, options = {}) {
@@ -477,8 +691,8 @@ async function resolveDirectDownloadLink(downloadListUrl, options = {}) {
         const res = await fetchUrl(downloadListUrl, options);
         const html = res.body;
 
-        // 1. Direct storage servers and mirrors (including Dlsitex high speed storage, Vikingfile, 1Fichier, Mediafire, etc.)
-        const directMatch = html.match(/href=['"](https?:\/\/(?:s\d+\.dlsitex\.online|vikingfile|1fichier|datanodes|multiup|rushupload|mediafire|mega|megaup|drive\.google)[^'"]+)['"]/i);
+        // 1. Direct storage servers and mirrors (including Dlsitex high speed storage, Vikingfile, 1Fichier, Mediafire, share.zip, etc.)
+        const directMatch = html.match(/href=['"](https?:\/\/(?:s\d+\.dlsitex\.online|vikingfile|share\.zip|1fichier|datanodes|multiup|rushupload|mediafire|mega|megaup|drive\.google)[^'"]+)['"]/i);
 
         // 2. Button with class btn-download or id download-link
         const btnMatch = html.match(/<a\b[^>]*\bclass=['"][^'"]*btn-download[^'"]*['"][^>]*\bhref=['"]([^'"]+)['"]/i) ||
@@ -489,20 +703,33 @@ async function resolveDirectDownloadLink(downloadListUrl, options = {}) {
                       html.match(/id=['"]download-link['"][^>]*\s+href=['"]([^'"]+)['"]/i) ||
                       html.match(/href=['"]([^'"]+)['"][^>]*id=['"]download-link['"]/i);
 
+        let targetUrl = null;
         if (directMatch && (!match || /nswpediax\.site/i.test(match[1]))) {
-            return directMatch[1].replace(/&amp;/g, '&');
-        }
-
-        if (match) {
+            targetUrl = directMatch[1].replace(/&amp;/g, '&');
+        } else if (match) {
             const url = match[1].replace(/&amp;/g, '&');
             if (/nswpediax\.site/i.test(url) && directMatch) {
-                return directMatch[1].replace(/&amp;/g, '&');
+                targetUrl = directMatch[1].replace(/&amp;/g, '&');
+            } else {
+                targetUrl = url;
             }
-            return url;
+        } else if (directMatch) {
+            targetUrl = directMatch[1].replace(/&amp;/g, '&');
         }
 
-        if (directMatch) {
-            return directMatch[1].replace(/&amp;/g, '&');
+        if (targetUrl) {
+            // Check if URL points to share.zip which requires solving Cap captcha
+            if (targetUrl.includes('share.zip/file/')) {
+                try {
+                    const resolvedShareZip = await resolveShareZipDirectLink(targetUrl);
+                    if (resolvedShareZip) {
+                        return resolvedShareZip;
+                    }
+                } catch (szErr) {
+                    console.warn(`    ⚠️ Failed to resolve share.zip captcha link (${targetUrl}): ${szErr.message}`);
+                }
+            }
+            return targetUrl;
         }
 
         return null;
@@ -1086,6 +1313,7 @@ module.exports = {
     scrapeGame,
     downloadFile,
     resolveDirectDownloadLink,
+    resolveShareZipDirectLink,
     parseRomItemDetails,
     cleanGameTitle,
     cleanDlcDisplayName,
