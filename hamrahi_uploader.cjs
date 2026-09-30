@@ -9,7 +9,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const CHUNK_SIZE = 15728640; // 15MB optimized chunk size for AbreHamrahi
+const CHUNK_SIZE = 5242880; // 5MB standard chunk size matching AbreHamrahi start-upload allocation
 
 function request(options, data = null, retries = 3, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
