@@ -96,10 +96,10 @@ function putChunk(urlStr, buffer, retries = 5, timeoutMs = 60000) {
                     const backoff = isLockOrRateLimit 
                         ? Math.floor(3000 * Math.pow(1.5, 5 - retries) + Math.random() * 2000)
                         : 2000;
-                    console.log(`\n⚠️ Chunk failed with status ${res.statusCode}. Retrying in ${(backoff / 1000).toFixed(1)}s (${retries} left)...`);
+                    console.log(`\n⚠️ Chunk failed with status ${res.statusCode} (Detail: ${body.slice(0, 200)}). Retrying in ${(backoff / 1000).toFixed(1)}s (${retries} left)...`);
                     setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), backoff);
                 } else {
-                    reject(new Error(`Failed to upload chunk: HTTP ${res.statusCode}`));
+                    reject(new Error(`Failed to upload chunk: HTTP ${res.statusCode} - ${body}`));
                 }
             });
         });
