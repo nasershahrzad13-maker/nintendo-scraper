@@ -14,7 +14,7 @@ const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { getAccessToken, resolveFolderPath, findExistingFileInHamrahi, request: rawRequest } = require('./hamrahi_uploader.cjs');
+const { getAccessToken, resolveFolderPath, findExistingFileInHamrahi, createPublicLink } = require('./hamrahi_uploader.cjs');
 
 // Parse CLI flags
 const args = process.argv.slice(2);
@@ -88,39 +88,6 @@ function requestSite(endpoint, method = 'GET', data = null) {
     });
 }
 
-async function createPublicLink(accessToken, objId, refreshTokenInput) {
-    let activeToken = accessToken;
-    let linkRes = await rawRequest({
-        hostname: 'abrehamrahi.ir',
-        path: '/api/v2/sharing/public-link/create/',
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${activeToken}`,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
-    }, { obj_id: objId });
-
-    if ((linkRes.status === 401 || (linkRes.body && linkRes.body.code === 'token_not_valid')) && refreshTokenInput) {
-        activeToken = await getAccessToken(refreshTokenInput);
-        linkRes = await rawRequest({
-            hostname: 'abrehamrahi.ir',
-            path: '/api/v2/sharing/public-link/create/',
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${activeToken}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            }
-        }, { obj_id: objId });
-    }
-
-    if (linkRes.status === 200 && linkRes.body && linkRes.body.link) {
-        return linkRes.body.link;
-    }
-
-    throw new Error(`Public link creation failed (HTTP ${linkRes.status}): ${JSON.stringify(linkRes.body)}`);
-}
 
 async function main() {
     console.log('===========================================================');
