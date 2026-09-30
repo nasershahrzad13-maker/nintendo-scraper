@@ -49,9 +49,9 @@ const OFFICIAL_FALLBACK_URLS = {
     'ryujinx-1.3.3-win_x64.zip': 'https://archive.org/download/RyujinxReleases/ryujinx-1.1.1403-win_x64.zip',
     'ryujinx-1.3.3-linux_x64.tar.gz': 'https://archive.org/download/RyujinxReleases/ryujinx-1.1.1403-linux_x64.tar.gz',
     'ryujinx-1.3.3-macos_universal.app.tar.gz': 'https://archive.org/download/RyujinxReleases/ryujinx-1.1.1403-macos_universal.app.tar.gz',
-    'sudachi-master-win-x64-qt6.zip': 'https://archive.org/download/sudachi-master-2026-09-03-8246830/sudachi-master-2026-09-03-8246830-win-x64-qt6.zip',
+    'sudachi-master-win-x64-qt6.zip': 'https://archive.org/download/Sudachi-apk-1.0.5/sudachi-master-win-x64-qt6.zip',
     'sudachi-app-mainline-release.apk': 'https://archive.org/download/Sudachi-apk-1.0.5/app-mainline-release.apk',
-    'sudachi-master-linux-x86_64-qt6.zip': 'https://archive.org/download/sudachi-master-2026-09-03-8246830/sudachi-master-2026-09-03-8246830-linux-x86_64-qt6.zip',
+    'sudachi-master-linux-x86_64-qt6.zip': 'https://archive.org/download/Sudachi-apk-1.0.5/sudachi-master-linux-x86_64-qt6.zip',
     'suyu-windows-x86_64.zip': 'https://archive.org/download/suyu-emulator-releases/suyu-windows-x86_64.zip',
     'suyu-android-v0.0.3.apk': 'https://archive.org/download/suyu-emulator-releases/suyu-android-v0.0.3.apk',
     'suyu-linux-x86_64.AppImage': 'https://archive.org/download/suyu-emulator-releases/suyu-linux-x86_64.AppImage',
@@ -130,6 +130,11 @@ function formatBytes(bytes) {
  */
 async function downloadFileToDisk(url, destPath) {
     console.log(`   ⏳ Downloading file: ${url} ...`);
+
+    const dir = path.dirname(destPath);
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
 
     const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
