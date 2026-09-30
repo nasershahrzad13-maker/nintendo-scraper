@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+console.log("⚠️ Auto-sync script is disabled. Emulators are managed manually via the admin panel.");
+process.exit(0);
+
 /**
  * 🎮 Nintendo Switch Emulators Auto-Sync & AbreHamrahi Cloud Uploader
  * 
@@ -351,7 +354,7 @@ async function main() {
                         folderId,
                         fileName,
                         REFRESH_TOKEN,
-                        4
+                        1
                     );
 
                     finalPublicUrl = uploadResult.public_url;

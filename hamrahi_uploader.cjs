@@ -70,7 +70,7 @@ function request(options, data = null, retries = 3, timeoutMs = 30000) {
     });
 }
 
-function putChunk(urlStr, buffer, retries = 3, timeoutMs = 60000) {
+function putChunk(urlStr, buffer, retries = 5, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
         const url = new URL(urlStr);
         const req = https.request({
@@ -92,8 +92,12 @@ function putChunk(urlStr, buffer, retries = 3, timeoutMs = 60000) {
                         etag: res.headers.etag ? res.headers.etag.replace(/"/g, '') : ''
                     });
                 } else if (retries > 0) {
-                    console.log(`\n⚠️ Chunk failed with status ${res.statusCode}. Retrying (${retries} left)...`);
-                    setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), 2000);
+                    const isLockOrRateLimit = (res.statusCode === 423 || res.statusCode === 429);
+                    const backoff = isLockOrRateLimit 
+                        ? Math.floor(3000 * Math.pow(1.5, 5 - retries) + Math.random() * 2000)
+                        : 2000;
+                    console.log(`\n⚠️ Chunk failed with status ${res.statusCode}. Retrying in ${(backoff / 1000).toFixed(1)}s (${retries} left)...`);
+                    setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), backoff);
                 } else {
                     reject(new Error(`Failed to upload chunk: HTTP ${res.statusCode}`));
                 }
