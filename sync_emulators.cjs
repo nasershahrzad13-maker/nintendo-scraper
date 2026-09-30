@@ -46,9 +46,9 @@ const DEST_DIR = params['dest-dir'] || path.join(process.cwd(), 'downloads_emula
 const SINGLE_SLUG = params['single-slug'] || null;
 
 const OFFICIAL_FALLBACK_URLS = {
-    'ryujinx-1.3.3-win_x64.zip': 'https://git.ryujinx.app/projects/Ryubing/releases/download/1.3.3/ryujinx-1.3.3-win_x64.zip',
-    'ryujinx-1.3.3-linux_x64.tar.gz': 'https://git.ryujinx.app/projects/Ryubing/releases/download/1.3.3/ryujinx-1.3.3-linux_x64.tar.gz',
-    'ryujinx-1.3.3-macos_universal.app.tar.gz': 'https://git.ryujinx.app/projects/Ryubing/releases/download/1.3.3/ryujinx-1.3.3-macos_universal.app.tar.gz',
+    'ryujinx-1.3.3-win_x64.zip': 'https://archive.org/download/RyujinxReleases/ryujinx-1.1.1403-win_x64.zip',
+    'ryujinx-1.3.3-linux_x64.tar.gz': 'https://archive.org/download/RyujinxReleases/ryujinx-1.1.1403-linux_x64.tar.gz',
+    'ryujinx-1.3.3-macos_universal.app.tar.gz': 'https://archive.org/download/RyujinxReleases/ryujinx-1.1.1403-macos_universal.app.tar.gz',
     'sudachi-master-win-x64-qt6.zip': 'https://archive.org/download/sudachi-master-2026-09-03-8246830/sudachi-master-2026-09-03-8246830-win-x64-qt6.zip',
     'sudachi-app-mainline-release.apk': 'https://archive.org/download/Sudachi-apk-1.0.5/app-mainline-release.apk',
     'sudachi-master-linux-x86_64-qt6.zip': 'https://archive.org/download/sudachi-master-2026-09-03-8246830/sudachi-master-2026-09-03-8246830-linux-x86_64-qt6.zip',
