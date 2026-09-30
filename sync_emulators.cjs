@@ -1,8 +1,5 @@
 #!/usr/bin/env node
 
-console.log("⚠️ Auto-sync script is disabled. Emulators are managed manually via the admin panel.");
-process.exit(0);
-
 /**
  * 🎮 Nintendo Switch Emulators Auto-Sync & AbreHamrahi Cloud Uploader
  * 
@@ -158,7 +155,7 @@ async function downloadFileToDisk(url, destPath) {
     try {
         execSync('which aria2c', { stdio: 'ignore' });
         hasAria2 = true;
-    } catch {}
+    } catch { }
 
     if (hasAria2) {
         try {
@@ -365,7 +362,7 @@ async function main() {
                 } finally {
                     // Remove temp file
                     if (fs.existsSync(localFilePath)) {
-                        try { fs.unlinkSync(localFilePath); } catch {}
+                        try { fs.unlinkSync(localFilePath); } catch { }
                     }
                 }
             }
