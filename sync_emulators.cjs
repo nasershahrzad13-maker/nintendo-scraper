@@ -46,9 +46,9 @@ const DEST_DIR = params['dest-dir'] || path.join(process.cwd(), 'downloads_emula
 const SINGLE_SLUG = params['single-slug'] || null;
 
 const OFFICIAL_FALLBACK_URLS = {
-    'ryujinx-1.3.3-win_x64.zip': 'https://archive.org/download/RyujinxReleases/ryujinx-1.1.1403-win_x64.zip',
-    'ryujinx-1.3.3-linux_x64.tar.gz': 'https://archive.org/download/RyujinxReleases/ryujinx-1.1.1403-linux_x64.tar.gz',
-    'ryujinx-1.3.3-macos_universal.app.tar.gz': 'https://archive.org/download/RyujinxReleases/ryujinx-1.1.1403-macos_universal.app.tar.gz',
+    'ryujinx-1.3.3-win_x64.zip': 'https://archive.org/download/ryujinx-1.3.3-stable/Ryujinx%201.3.3%20%28stable%29.zip',
+    'ryujinx-1.3.3-linux_x64.tar.gz': 'https://archive.org/download/ryujinx-1.3.3-stable/Ryujinx%201.3.3%20%28stable%29.zip',
+    'ryujinx-1.3.3-macos_universal.app.tar.gz': 'https://archive.org/download/ryujinx-1.3.3-stable/Ryujinx%201.3.3%20%28stable%29.zip',
     'sudachi-master-win-x64-qt6.zip': 'https://archive.org/download/Sudachi-apk-1.0.5/sudachi-master-win-x64-qt6.zip',
     'sudachi-app-mainline-release.apk': 'https://archive.org/download/Sudachi-apk-1.0.5/app-mainline-release.apk',
     'sudachi-master-linux-x86_64-qt6.zip': 'https://archive.org/download/Sudachi-apk-1.0.5/sudachi-master-linux-x86_64-qt6.zip',
@@ -305,19 +305,20 @@ async function main() {
             // Step 1: Check cache in AbreHamrahi folder
             const existingInHamrahi = await findExistingFileInHamrahi(accessToken, folderId, [fileName], REFRESH_TOKEN);
 
-            if (existingInHamrahi) {
-                console.log(`   ⚡ [CACHE HIT] File already exists in AbreHamrahi!`);
+            if (existingInHamrahi && (fileName.includes('keys') || existingInHamrahi.size >= 1048576)) {
+                console.log(`   ⚡ [CACHE HIT] Valid file already exists in AbreHamrahi! (${formatBytes(existingInHamrahi.size)})`);
                 finalPublicUrl = existingInHamrahi.public_url;
                 fileSizeBytes = existingInHamrahi.size;
                 fileSizeStr = formatBytes(fileSizeBytes);
             } else {
-                // Step 2: Download the file locally
+                if (existingInHamrahi) {
+                    console.log(`   ⚠️ Existing file in AbreHamrahi is corrupted/invalid size (${formatBytes(existingInHamrahi.size)}). Overwriting with clean binary...`);
+                }
+
+                // Step 2: Download the file locally using verified OFFICIAL_FALLBACK_URLS
                 const localFilePath = path.join(DEST_DIR, fileName);
 
-                let downloadSourceUrl = currentUrl;
-                if (!downloadSourceUrl || downloadSourceUrl.includes('abrehamrahi.ir')) {
-                    downloadSourceUrl = OFFICIAL_FALLBACK_URLS[fileName] || currentUrl;
-                }
+                let downloadSourceUrl = OFFICIAL_FALLBACK_URLS[fileName] || currentUrl;
 
                 try {
                     try {
@@ -335,6 +336,12 @@ async function main() {
                     const stat = fs.statSync(localFilePath);
                     fileSizeBytes = stat.size;
                     fileSizeStr = formatBytes(fileSizeBytes);
+
+                    // Strict validation: Emulators & Firmware zip/apk binaries must be >= 1MB (reject 137KB HTML error pages)
+                    if (!fileName.includes('keys') && fileSizeBytes < 1048576) {
+                        throw new Error(`Downloaded file "${fileName}" is invalid/corrupted size (${fileSizeStr}). Expected full binary archive, got HTML error page.`);
+                    }
+
                     console.log(`   📦 Local file ready (${fileSizeStr}) -> Uploading to AbreHamrahi...`);
 
                     // Step 3: Upload to AbreHamrahi Cloud
