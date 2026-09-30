@@ -131,19 +131,32 @@ function formatBytes(bytes) {
 async function downloadFileToDisk(url, destPath) {
     console.log(`   ⏳ Downloading file: ${url} ...`);
 
+    const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+    // Primary: curl -L with retry and user-agent (handles Archive.org CDN redirects seamlessly)
+    try {
+        execSync(`curl -L --retry 3 -s -S -A "${userAgent}" --connect-timeout 30 --max-time 300 -o "${destPath}" "${url}"`, {
+            stdio: 'inherit'
+        });
+        if (fs.existsSync(destPath) && fs.statSync(destPath).size > 1024) {
+            return destPath;
+        }
+    } catch (e) {
+        console.log(`   ⚠️ curl download failed (${e.message}). Retrying with aria2...`);
+    }
+
+    // Fallback: aria2c single-connection
     let hasAria2 = false;
     try {
         execSync('which aria2c', { stdio: 'ignore' });
         hasAria2 = true;
     } catch {}
 
-    const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
     if (hasAria2) {
         try {
             const dir = path.dirname(destPath);
             const outName = path.basename(destPath);
-            execSync(`aria2c -x 4 -s 4 -j 2 -k 1M --connect-timeout=30 --timeout=45 --max-tries=4 --user-agent="${userAgent}" --allow-overwrite=true --dir="${dir}" -o "${outName}" "${url}"`, {
+            execSync(`aria2c -x 1 -s 1 --connect-timeout=30 --timeout=45 --max-tries=4 --user-agent="${userAgent}" --allow-overwrite=true --dir="${dir}" -o "${outName}" "${url}"`, {
                 stdio: 'inherit',
                 timeout: 300000
             });
@@ -151,20 +164,12 @@ async function downloadFileToDisk(url, destPath) {
                 return destPath;
             }
         } catch (err) {
-            console.log(`   ⚠️ aria2 failed (${err.message}). Falling back to curl/stream...`);
+            throw new Error(`Download failed for ${url}: ${err.message}`);
         }
     }
 
-    // Fallback: curl or node stream
-    try {
-        execSync(`curl -L -f -s -S -A "${userAgent}" --connect-timeout 30 --max-time 300 -o "${destPath}" "${url}"`, {
-            stdio: 'inherit'
-        });
-        if (fs.existsSync(destPath) && fs.statSync(destPath).size > 1024) {
-            return destPath;
-        }
-    } catch (e) {
-        throw new Error(`Download failed for ${url}: ${e.message}`);
+    if (!fs.existsSync(destPath) || fs.statSync(destPath).size <= 1024) {
+        throw new Error(`Download completed but file is empty or missing: ${destPath}`);
     }
 
     return destPath;
