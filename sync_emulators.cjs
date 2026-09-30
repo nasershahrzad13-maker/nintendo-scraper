@@ -137,11 +137,13 @@ async function downloadFileToDisk(url, destPath) {
         hasAria2 = true;
     } catch {}
 
+    const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
     if (hasAria2) {
         try {
             const dir = path.dirname(destPath);
             const outName = path.basename(destPath);
-            execSync(`aria2c -x 8 -s 8 -j 4 -k 1M --allow-overwrite=true --dir="${dir}" -o "${outName}" "${url}"`, {
+            execSync(`aria2c -x 4 -s 4 -j 2 -k 1M --connect-timeout=30 --timeout=45 --max-tries=4 --user-agent="${userAgent}" --allow-overwrite=true --dir="${dir}" -o "${outName}" "${url}"`, {
                 stdio: 'inherit',
                 timeout: 300000
             });
@@ -155,7 +157,7 @@ async function downloadFileToDisk(url, destPath) {
 
     // Fallback: curl or node stream
     try {
-        execSync(`curl -L -f -s -S --connect-timeout 20 --max-time 300 -o "${destPath}" "${url}"`, {
+        execSync(`curl -L -f -s -S -A "${userAgent}" --connect-timeout 30 --max-time 300 -o "${destPath}" "${url}"`, {
             stdio: 'inherit'
         });
         if (fs.existsSync(destPath) && fs.statSync(destPath).size > 1024) {
