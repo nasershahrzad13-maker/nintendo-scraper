@@ -350,8 +350,7 @@ async function main() {
                         localFilePath,
                         folderId,
                         fileName,
-                        REFRESH_TOKEN,
-                        4
+                        REFRESH_TOKEN
                     );
 
                     finalPublicUrl = uploadResult.public_url;
