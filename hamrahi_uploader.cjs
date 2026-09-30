@@ -79,6 +79,8 @@ function putChunk(urlStr, buffer, retries = 5, timeoutMs = 60000) {
             path: url.pathname + url.search,
             method: 'PUT',
             headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': '*/*',
                 'Content-Length': buffer.length
             },
             timeout: timeoutMs
