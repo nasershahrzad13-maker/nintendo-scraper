@@ -9,7 +9,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const CHUNK_SIZE = 5242880; // 5MB standard chunk size for AbreHamrahi
+const CHUNK_SIZE = 15728640; // 15MB optimized chunk size for AbreHamrahi
 
 function request(options, data = null, retries = 3, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
@@ -530,6 +530,8 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
         await refreshActiveToken();
     }
 
+    const formattedParent = parentFolderId ? (isNaN(parentFolderId) ? parentFolderId : Number(parentFolderId)) : null;
+
     let completeRes = await request({
         hostname: 'abrehamrahi.ir',
         path: '/api/v2/flat/complete-upload/',
@@ -542,7 +544,7 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
     }, {
         key: key,
         name: fileName,
-        parent: parentFolderId,
+        parent: formattedParent,
         upload_id: upload_id,
         parts: completedParts,
         force_overwrite: true
@@ -563,7 +565,7 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
         }, {
             key: key,
             name: fileName,
-            parent: parentFolderId,
+            parent: formattedParent,
             upload_id: upload_id,
             parts: completedParts,
             force_overwrite: true
