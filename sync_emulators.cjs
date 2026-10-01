@@ -61,6 +61,32 @@ const OFFICIAL_FALLBACK_URLS = {
     'prod.keys': 'https://archive.org/download/nspk1901/prod.keys'
 };
 
+const DEFAULT_RELEASES_BY_SLUG = {
+    'ryujinx': [
+        { platform: 'windows', architecture: 'x64', file_name: 'ryujinx-1.3.3-win_x64.zip', download_url: 'https://git.ryujinx.app/projects/Ryubing/releases/download/1.3.3/ryujinx-1.3.3-win_x64.zip' },
+        { platform: 'linux', architecture: 'x64', file_name: 'ryujinx-1.3.3-linux_x64.tar.gz', download_url: 'https://git.ryujinx.app/projects/Ryubing/releases/download/1.3.3/ryujinx-1.3.3-linux_x64.tar.gz' },
+        { platform: 'macos', architecture: 'arm64', file_name: 'ryujinx-1.3.3-macos_universal.app.tar.gz', download_url: 'https://git.ryujinx.app/projects/Ryubing/releases/download/1.3.3/ryujinx-1.3.3-macos_universal.app.tar.gz' },
+    ],
+    'sudachi': [
+        { platform: 'windows', architecture: 'x64', file_name: 'sudachi-master-win-x64-qt6.zip', download_url: 'https://archive.org/download/sudachi-master-2026-09-30-3827486/sudachi-master-2026-09-30-3827486-windows-x64-qt6.zip' },
+        { platform: 'android', architecture: 'arm64', file_name: 'sudachi-app-mainline-release.apk', download_url: 'https://archive.org/download/Sudachi-apk-1.0.5/app-mainline-release.apk' },
+        { platform: 'linux', architecture: 'x64', file_name: 'sudachi-master-linux-x86_64-qt6.zip', download_url: 'https://archive.org/download/sudachi-master-2026-09-30-3827486/sudachi-master-2026-09-30-3827486-linux-x86_64-qt6.zip' },
+    ],
+    'suyu': [
+        { platform: 'windows', architecture: 'x64', file_name: 'suyu-windows-x86_64.zip', download_url: 'https://archive.org/download/suyu-emulator-releases/suyu-windows-x86_64.zip' },
+        { platform: 'android', architecture: 'arm64', file_name: 'suyu-android-v0.0.3.apk', download_url: 'https://archive.org/download/suyu-emulator-releases/suyu-android-v0.0.3.apk' },
+        { platform: 'linux', architecture: 'x64', file_name: 'suyu-linux-x86_64.AppImage', download_url: 'https://archive.org/download/suyu-emulator-releases/suyu-linux-x86_64.AppImage' },
+    ],
+    'torzu': [
+        { platform: 'windows', architecture: 'x64', file_name: 'torzu-windows-msvc.zip', download_url: 'https://archive.org/download/torzu-switch-emulator/torzu-windows-msvc.zip' },
+        { platform: 'linux', architecture: 'x64', file_name: 'torzu-linux.AppImage', download_url: 'https://archive.org/download/torzu-switch-emulator/torzu-linux.AppImage' },
+    ],
+    'switch-firmware-keys': [
+        { platform: 'windows', architecture: 'universal', file_name: 'Nintendo-Switch-Firmware-21.2.0.zip', download_url: 'https://archive.org/download/nintendo-switch-firmware.-21.2.0/Prodkeys.io_Firmware_21.2.0.zip' },
+        { platform: 'android', architecture: 'universal', file_name: 'prod.keys', download_url: 'https://archive.org/download/nspk1901/prod.keys' },
+    ]
+};
+
 /**
  * Make authenticated HTTP request to site API
  */
@@ -286,7 +312,7 @@ async function main() {
         console.log(`📂 Resolving AbreHamrahi folder: "${folderPath}"...`);
         const folderId = await resolveFolderPath(accessToken, folderPath, REFRESH_TOKEN);
 
-        const releases = emu.releases || [];
+        const releases = (emu.releases && emu.releases.length > 0) ? emu.releases : (DEFAULT_RELEASES_BY_SLUG[emu.slug] || []);
 
         for (const rel of releases) {
             const fileName = rel.file_name;

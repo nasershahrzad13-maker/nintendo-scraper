@@ -419,7 +419,7 @@ async function findExistingFileInHamrahi(accessToken, folderId, fileNames, refre
 /**
  * Upload a local file to AbreHamrahi with parallel multi-part upload & progress indicator
  */
-async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null, customFileName = null, refreshToken = null, concurrency = 1) {
+async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null, customFileName = null, refreshToken = null, concurrency = 8) {
     if (!fs.existsSync(filePath)) {
         throw new Error(`File not found at: ${filePath}`);
     }
