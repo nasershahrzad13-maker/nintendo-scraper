@@ -58,7 +58,6 @@ const ZIP_PASSWORD = params['zip-password'] || process.env.ZIP_PASSWORD || 'nint
 const PART_SIZE_MB = parseInt(params['part-size-mb'] || '950', 10) || 950; // 950MB parts (AbreHamrahi storage safe limit)
 const BATCH_LIMIT = parseInt(params['limit'] || '50', 10) || 50;
 const FORCE_REUPLOAD = params['force-reupload'] === true || params['force'] === true || process.env.FORCE_REUPLOAD === 'true';
-const UPLOAD_CONCURRENCY = parseInt(params['concurrency'] || process.env.UPLOAD_CONCURRENCY || '8', 10) || 8;
 const MAX_RUN_MINUTES = parseInt(params['max-time-minutes'] || process.env.MAX_RUN_MINUTES || '60', 10) || 60; // Soft time limit in minutes
 const RUN_START_TIME = Date.now();
 
@@ -894,7 +893,7 @@ function getMirrorScore(url) {
                                 }
 
                                 if (!partUploadResult) {
-                                    partUploadResult = await uploadFileToHamrahi(currentAccessToken, part.path, folderId, part.name, REFRESH_TOKEN, UPLOAD_CONCURRENCY);
+                                    partUploadResult = await uploadFileToHamrahi(currentAccessToken, part.path, folderId, part.name, REFRESH_TOKEN);
                                 }
 
                                 if (!partUploadResult || !partUploadResult.public_url || !partUploadResult.public_url.startsWith('http')) {

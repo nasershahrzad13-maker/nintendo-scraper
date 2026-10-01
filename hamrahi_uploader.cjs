@@ -9,7 +9,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const CHUNK_SIZE = 5242880; // 5MB standard chunk size matching AbreHamrahi start-upload allocation
+const CHUNK_SIZE = 5242880; // 5MB standard chunk size for AbreHamrahi
 
 function request(options, data = null, retries = 3, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
@@ -70,7 +70,7 @@ function request(options, data = null, retries = 3, timeoutMs = 30000) {
     });
 }
 
-function putChunk(urlStr, buffer, retries = 5, timeoutMs = 60000) {
+function putChunk(urlStr, buffer, retries = 3, timeoutMs = 60000) {
     return new Promise((resolve, reject) => {
         const url = new URL(urlStr);
         const req = https.request({
@@ -79,18 +79,6 @@ function putChunk(urlStr, buffer, retries = 5, timeoutMs = 60000) {
             path: url.pathname + url.search,
             method: 'PUT',
             headers: {
-                'Host': url.hostname,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9,fa;q=0.8',
-                'Origin': 'https://abrehamrahi.ir',
-                'Referer': 'https://abrehamrahi.ir/',
-                'Sec-Ch-Ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
-                'Sec-Fetch-Dest': 'empty',
-                'Sec-Fetch-Mode': 'cors',
-                'Sec-Fetch-Site': 'cross-site',
                 'Content-Length': buffer.length
             },
             timeout: timeoutMs
@@ -104,14 +92,10 @@ function putChunk(urlStr, buffer, retries = 5, timeoutMs = 60000) {
                         etag: res.headers.etag ? res.headers.etag.replace(/"/g, '') : ''
                     });
                 } else if (retries > 0) {
-                    const isLockOrRateLimit = (res.statusCode === 423 || res.statusCode === 429);
-                    const backoff = isLockOrRateLimit 
-                        ? Math.floor(3000 * Math.pow(1.5, 5 - retries) + Math.random() * 2000)
-                        : 2000;
-                    console.log(`\n⚠️ Chunk failed with status ${res.statusCode} (Detail: ${body.slice(0, 200)}). Retrying in ${(backoff / 1000).toFixed(1)}s (${retries} left)...`);
-                    setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), backoff);
+                    console.log(`\n⚠️ Chunk failed with status ${res.statusCode}. Retrying (${retries} left)...`);
+                    setTimeout(() => resolve(putChunk(urlStr, buffer, retries - 1, timeoutMs)), 2000);
                 } else {
-                    reject(new Error(`Failed to upload chunk: HTTP ${res.statusCode} - ${body}`));
+                    reject(new Error(`Failed to upload chunk: HTTP ${res.statusCode}`));
                 }
             });
         });
@@ -546,8 +530,6 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
         await refreshActiveToken();
     }
 
-    const formattedParent = parentFolderId ? (isNaN(parentFolderId) ? parentFolderId : Number(parentFolderId)) : null;
-
     let completeRes = await request({
         hostname: 'abrehamrahi.ir',
         path: '/api/v2/flat/complete-upload/',
@@ -560,7 +542,7 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
     }, {
         key: key,
         name: fileName,
-        parent: formattedParent,
+        parent: parentFolderId,
         upload_id: upload_id,
         parts: completedParts,
         force_overwrite: true
@@ -581,7 +563,7 @@ async function uploadFileToHamrahi(accessToken, filePath, parentFolderId = null,
         }, {
             key: key,
             name: fileName,
-            parent: formattedParent,
+            parent: parentFolderId,
             upload_id: upload_id,
             parts: completedParts,
             force_overwrite: true
