@@ -23,6 +23,7 @@ const { execSync } = require('child_process');
 const {
     scrapeGame,
     downloadFile,
+    resolveDirectDownloadLink,
     resolveShareZipDirectLink,
     cleanGameTitle,
     cleanDlcDisplayName,
@@ -664,6 +665,32 @@ async function run() {
             console.log(`    Screens:   ${gameData.screenshots.length} screenshot(s) found`);
             console.log(`    Mirrors:   ${gameData.downloads.length} mirror link(s) found\n`);
 
+/**
+ * Check if a direct download URL is expired or close to expiration (AWS S3 / Cloudflare R2 Presigned URL)
+ */
+function isDirectUrlExpired(url, bufferSeconds = 300) {
+    if (!url || typeof url !== 'string') return true;
+    try {
+        const u = new URL(url);
+        const amzDate = u.searchParams.get('X-Amz-Date');
+        const amzExpires = parseInt(u.searchParams.get('X-Amz-Expires') || '0', 10);
+        if (amzDate && amzExpires > 0) {
+            // amzDate format: YYYYMMDDTHHMMSSZ (e.g. 20261001T201305Z)
+            const year = parseInt(amzDate.substring(0, 4), 10);
+            const month = parseInt(amzDate.substring(4, 6), 10) - 1;
+            const day = parseInt(amzDate.substring(6, 8), 10);
+            const hours = parseInt(amzDate.substring(9, 11), 10);
+            const mins = parseInt(amzDate.substring(11, 13), 10);
+            const secs = parseInt(amzDate.substring(13, 15), 10);
+            const signedTimeMs = Date.UTC(year, month, day, hours, mins, secs);
+            const expireTimeMs = signedTimeMs + (amzExpires * 1000);
+            const now = Date.now();
+            return now >= (expireTimeMs - bufferSeconds * 1000);
+        }
+    } catch {}
+    return false;
+}
+
 function getMirrorScore(url) {
     if (!url) return -999;
     const u = url.toLowerCase();
@@ -827,6 +854,24 @@ function getMirrorScore(url) {
                                 const currentMirror = fileItem.mirrors[mIdx];
                                 let sourceUrl = currentMirror.directUrl;
 
+                                // Check if the direct presigned URL has expired while previous parts were uploading
+                                const expired = isDirectUrlExpired(sourceUrl, 180);
+                                if (expired && currentMirror.intermediateUrl) {
+                                    console.log(`    ⏳ Direct URL for mirror ${mIdx + 1} has expired or will expire shortly. Resolving fresh direct download link...`);
+                                    try {
+                                        const freshDirect = await resolveDirectDownloadLink(currentMirror.intermediateUrl, {
+                                            referer: gameData.downloadPageUrl || item.nswpedia_url
+                                        });
+                                        if (freshDirect) {
+                                            sourceUrl = freshDirect;
+                                            currentMirror.directUrl = freshDirect;
+                                            console.log(`    ✨ Successfully refreshed direct mirror link.`);
+                                        }
+                                    } catch (freshErr) {
+                                        console.warn(`    ⚠️ Failed to refresh direct link from intermediate URL: ${freshErr.message}`);
+                                    }
+                                }
+
                                 // If sourceUrl is a share.zip page link, automatically resolve captcha to direct storage URL
                                 if (sourceUrl && sourceUrl.includes('share.zip/file/')) {
                                     try {
@@ -854,6 +899,31 @@ function getMirrorScore(url) {
                                     if (fs.existsSync(tempLocalFilePath)) {
                                         try { fs.unlinkSync(tempLocalFilePath); } catch {}
                                     }
+
+                                    // If failed with 403 or abort, try to re-resolve intermediate URL once more
+                                    if (currentMirror.intermediateUrl && !expired) {
+                                        console.log(`    🔄 Attempting to re-resolve fresh direct link after download failure...`);
+                                        try {
+                                            const freshDirect = await resolveDirectDownloadLink(currentMirror.intermediateUrl, {
+                                                referer: gameData.downloadPageUrl || item.nswpedia_url
+                                            });
+                                            if (freshDirect && freshDirect !== sourceUrl) {
+                                                sourceUrl = freshDirect;
+                                                currentMirror.directUrl = freshDirect;
+                                                console.log(`    📥 Retrying mirror ${mIdx + 1} with freshly resolved direct URL...`);
+                                                dlResult = await downloadRomFile(sourceUrl, tempLocalFilePath);
+                                                console.log(`\n    ✅ Downloaded successfully on retry from Mirror ${mIdx + 1}: ${formatBytes(dlResult.totalBytes)}`);
+                                                downloadedFilePath = tempLocalFilePath;
+                                                break;
+                                            }
+                                        } catch (retryErr) {
+                                            console.warn(`    ⚠️ Re-resolve retry failed: ${retryErr.message}`);
+                                            if (fs.existsSync(tempLocalFilePath)) {
+                                                try { fs.unlinkSync(tempLocalFilePath); } catch {}
+                                            }
+                                        }
+                                    }
+
                                     if (mIdx < fileItem.mirrors.length - 1) {
                                         console.log(`    🔄 Falling back to mirror ${mIdx + 2}/${fileItem.mirrors.length}...`);
                                     }
